@@ -1,4 +1,4 @@
-## v1.16 Scroll Fix
+## v1.17
 
 
 
@@ -2587,5 +2587,173 @@ El único `addPostFrameCallback` restante está en `_scrollToBottom`, usado solo
 
 
 #############################################################
+## v1.17
+
+
+
+## prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+MEJORA v1.17: Mensajes nuevos del cliente no visibles + mayúscula al escribir
+
+## Lectura obligatoria antes de tocar código
+1. **`PROMPT_EVOLUCION_SAAS_WHATSBOT.md`** — WhatsBot = Flutter móvil, UI tipo WhatsApp, offline-first, cero regresión del chatbot, **cambio mínimo por fase**.
+2. **`docs/INCREMENTAL_GUIDE.md`** — secciones ya cerradas (no reimplementar):
+   - "Chat: apertura instantánea desde caché" (TTL, spinner solo sin caché)
+   - "Chat: apertura fluida sin saltos (reverse ListView)" (`reverse: true`, `initialMessages`, `getCachedMessages`)
+3. **`docs/FLUTTER_APP.md`** — arquitectura offline-first: Drift SQLite → repositorios → `SyncEngine` → streams; WS sin polling.
+
+**Prohibido en esta fase:** tocar backend Python, API REST, webhook Twilio, chatbot, `SyncEngine`, TTL, `needsSyncFromApi`, `refreshFromApi` ni lógica de sync incremental. Solo Flutter (`whatsbot_app/`), cambio mínimo.
+
+---
+
+# MEJORA v1.17 — Dos fixes en el chat
+
+## A) BUG: Mensajes nuevos del cliente no se ven en el chat
+
+### Síntoma exacto (reportado)
+- La **notificación push suena y llega** cuando entra un mensaje nuevo del cliente.
+- En el chat **sí se ven los mensajes anteriores** (historial cargado).
+- En el chat **sí se ven los mensajes que escribe el admin** desde la app.
+- **NO se ven los mensajes nuevos entrantes del cliente** mientras el chat está abierto (o al reabrir tras la notificación).
+- La lista de chats puede actualizar preview; el problema es la **burbuja dentro del chat**.
+
+### Diagnóstico obligatorio (antes de codear)
+El push/notificación usa el **payload del evento WS/push** (`message_alerts`, `chats_list_screen`, `push_service`). El chat usa **`StreamBuilder` + `watchMessages` (SQLite)**. Hay dos caminos distintos — confirmar cuál falla:
+
+1. **¿El mensaje nuevo está en SQLite?** (solo lectura, sin cambiar sync)
+   - Con el chat abierto, al llegar `message.new`, ejecutar mentalmente/log:
+     `await messageRepository.watchMessages(conversationId).first`
+   - Si **SÍ está en SQLite pero NO en pantalla** → bug de **UI/stream/rebuild** (causa más probable, fix solo en `chat_screen.dart`).
+   - Si **NO está en SQLite** pero la notificación sí llegó → el evento llegó por WS/push pero la UI del chat no usa ese payload; fix mínimo en `chat_screen.dart` para **mostrar el mensaje del evento** sin tocar sync/backend.
+
+2. **¿El `StreamBuilder` recrea el stream en cada `build`?**
+   - Hoy: `stream: _messages.watchMessages(widget.conversation.id)` dentro del `builder`.
+   - Cada `setState` (typing, envío, pedidos…) crea una **nueva suscripción**.
+   - Los mensajes del admin se ven porque `_send()` hace `setState` y fuerza rebuild; los entrantes **no disparan `setState`** en `chat_screen` → la lista puede quedar desincronizada.
+
+3. **¿El listener `_messagesSub` actualiza la UI?**
+   - `_onMessagesUpdated` hace scroll y `_persistSeen`, pero **no llama `setState`**.
+   - Si el `StreamBuilder` no recibe/emite bien, la UI no se repinta.
+
+4. **Descartar (no tocar salvo evidencia irrefutable):** dedup en `upsertMessageDeduped`, API, backend.
+
+### Solución obligatoria (mínima, solo `chat_screen.dart`)
+
+**Paso 1 — Stream estable (una sola instancia)**
+```dart
+late final Stream<List<ChatMessage>> _messagesStream;
+
+@override
+void initState() {
+  ...
+  _messagesStream = _messages.watchMessages(widget.conversation.id);
+  _messagesSub = _messagesStream.listen(_onMessagesUpdated);
+}
+
+
+
+
+## resp cursor ##
+
+Implementada la **MEJORA v1.17** — solo en `chat_screen.dart`, sin tocar sync/backend.
+
+## A) Mensajes entrantes no visibles — causa y fix
+
+**Causa:** El `StreamBuilder` llamaba `_messages.watchMessages(...)` **dentro de `build()`**. Cada `setState` (typing, envío, pedidos, conectividad…) creaba una **nueva suscripción** al stream. Los mensajes del admin se veían porque `_send()` fuerza rebuild; los entrantes del cliente **no disparaban `setState`** → el `StreamBuilder` podía quedar desincronizado.
+
+**Fix:** Stream estable asignado una sola vez en `initState`:
+
+```67:71:whatsbot_app/lib/screens/chat_screen.dart
+    _messagesStream = _messages.watchMessages(widget.conversation.id);
+    _messagesSub = _messages
+        .watchMessages(widget.conversation.id)
+        .listen(_onMessagesUpdated);
+```
+
+```369:371:whatsbot_app/lib/screens/chat_screen.dart
+      body: StreamBuilder<List<ChatMessage>>(
+        stream: _messagesStream,
+        initialData: widget.initialMessages,
+```
+
+- `_messagesStream` → alimenta el `StreamBuilder` (UI).
+- `_messagesSub` → watch Drift **independiente** para scroll + `_persistSeen` (sin recrear el stream del builder).
+- Dos watches Drift estables evitan el problema de replay de `asBroadcastStream()` con dos listeners en un solo stream.
+
+## B) Mayúscula al escribir
+
+```433:434:whatsbot_app/lib/screens/chat_screen.dart
+                            textInputAction: TextInputAction.send,
+                            textCapitalization: TextCapitalization.sentences,
+```
+
+Comportamiento tipo WhatsApp: mayúscula al inicio de frase.
+
+## Verificación
+
+- `flutter analyze` — sin issues
+- `flutter test` — 11 tests OK
+- Nota en `docs/INCREMENTAL_GUIDE.md`
+
+## Prueba manual sugerida
+
+1. Abrir chat con historial → mensajes visibles al instante (sin regresión v1.16).
+2. Con chat abierto, recibir mensaje del cliente → burbuja aparece sin salir/reentrar.
+3. Tap en notificación push → al abrir el chat, el mensaje nuevo está visible.
+4. Escribir en el campo → primera letra en mayúscula al inicio de frase.
+
+
+## segundo prompt ##
+
+1. quiero que me propongas una mejora incremental basado en los md de prompt evolucion y eso, bueno ya me están llegando los chats y se actualiza solo, pero mira que por ejemplo si el admin de whatsbot le envía al usuario cosas, mensajes, se van colocando al final, y quedan ahí, y no tienen consistencia con los que envía el usuario, osea debería ir todo en orden, cierto? esa es una cosa para arreglar, 
+
+2. la segunda mejora del prompt es que cuando uno envía un mensaje se pone de primero en la lista de la lista de chats, pero cuando uno recibe un mensaje, el chat se va al final, debería ponerse al comienzo tanto como cuando uno envía como cuando uno recibe, mejoras incrementales tu sabes sin dañar nada solo mejora
+
+
+## resp cursor ##
+
+Implementé la **mejora incremental v1.18** con dos fixes concretos, sin tocar la arquitectura offline-first.
+
+## Qué pasaba
+
+### 1. Mensajes fuera de orden
+Los mensajes se ordenaban solo por `createdAt`. Cuando el dueño, el bot y el cliente escribían casi al mismo tiempo, el orden podía ser inconsistente. Además, el merge en pantalla no usaba el mismo criterio que SQLite.
+
+### 2. Lista de chats al recibir
+Al **enviar**, la conversación subía arriba porque `_ackOutbound` actualizaba `lastMessageAt`. Al **recibir**, a veces el mensaje ya estaba en SQLite (sync REST) y el WebSocket lo deduplicaba; entonces el `SyncEngine` **no actualizaba la conversación** y el chat quedaba abajo con timestamp viejo.
+
+## Qué se cambió
+
+| Archivo | Cambio |
+|---------|--------|
+| `message.dart` | `compareChronological()` — orden por `createdAt` + `id` |
+| `message_dao.dart` | Mismo orden estable en SQLite |
+| `sync_engine.dart` | Siempre sube la conversación en `message.new`, aunque el mensaje esté deduplicado |
+| `chat_repository.dart` | `mergeWithLocal()` — no baja `lastMessageAt` con datos viejos del servidor |
+| `message_repository.dart` | Al sincronizar mensajes por REST, actualiza preview/timestamp de la conversación |
+| `chat_screen.dart` | Usa el comparador cronológico en el merge WS |
+| `conversation_service.py` | API: `ORDER BY created_at, id` |
+
+## Cómo validar
+
+Con la app corriendo (`flutter run`):
+
+1. **Orden:** que el cliente escriba por WhatsApp mientras tú respondes desde la app — todo debe intercalarse en orden temporal (dueño, bot, cliente).
+2. **Lista:** al recibir un mensaje del cliente, ese chat debe subir al tope igual que cuando envías.
+
+Tests pasaron: `flutter test test/sync/sync_engine_test.dart test/repositories/chat_repository_test.dart`.
+
+Si quieres, el siguiente paso incremental podría ser documentar esto en `README_PROMPTS.md` como v1.18 para futuras sesiones.
+
+
+
+
+
+#################################################
+
+
 
 

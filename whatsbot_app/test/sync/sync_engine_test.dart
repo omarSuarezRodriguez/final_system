@@ -73,6 +73,52 @@ void main() {
     expect(conversation?.lastMessagePreview, 'Desde WS');
   });
 
+  test('handleRealtimeEvent actualiza conversación aunque el mensaje esté deduplicado',
+      () async {
+    final message = ChatMessage(
+      id: 88,
+      conversationId: 1,
+      direction: 'incoming',
+      body: 'Cliente escribe',
+      waId: '+5491111111111',
+      isAdmin: false,
+      channel: 'whatsapp',
+      status: 'delivered',
+      createdAt: DateTime.utc(2026, 6, 1, 15),
+    );
+    await messages.upsertMessage(message);
+
+    await chats.upsertConversation(
+      Conversation(
+        id: 1,
+        businessId: 'default',
+        customerWaId: '+5491111111111',
+        lastMessagePreview: 'Viejo',
+        lastMessageAt: DateTime.utc(2026, 6, 1, 10),
+        updatedAt: DateTime.utc(2026, 6, 1, 10),
+      ),
+    );
+
+    await engine.handleRealtimeEvent(
+      RealtimeEvent(
+        type: 'message.new',
+        message: message,
+        conversation: Conversation(
+          id: 1,
+          businessId: 'default',
+          customerWaId: '+5491111111111',
+          lastMessagePreview: 'Cliente escribe',
+          lastMessageAt: DateTime.utc(2026, 6, 1, 15),
+          updatedAt: DateTime.utc(2026, 6, 1, 15),
+        ),
+      ),
+    );
+
+    final conversation = await chats.getConversation(1);
+    expect(conversation?.lastMessageAt?.toUtc(), DateTime.utc(2026, 6, 1, 15));
+    expect(conversation?.lastMessagePreview, 'Cliente escribe');
+  });
+
   test('syncMessagesIncremental omite sync si caché reciente', () async {
     testApi.messagesByConversation[1] = [
       {

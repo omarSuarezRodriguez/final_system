@@ -42,18 +42,20 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _orderBusy = false;
   bool _peerTyping = false;
   int _lastMessageCount = 0;
+  List<ChatMessage> _displayMessages = [];
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
   StreamSubscription<List<ChatMessage>>? _messagesSub;
 
-  MessageRepository get _messages => AppServices.messageRepository;
+  MessageRepository get _messageRepo => AppServices.messageRepository;
   ChatRepository get _chats => AppServices.chatRepository;
 
   @override
   void initState() {
     super.initState();
-    _lastMessageCount = widget.initialMessages?.length ?? 0;
+    _displayMessages = List<ChatMessage>.from(widget.initialMessages ?? []);
+    _lastMessageCount = _displayMessages.length;
     AppServices.syncEngine.trackOpenConversation(widget.conversation.id);
     messageAlerts.setActiveConversation(widget.conversation.id);
     _inputController.addListener(_onInputChanged);
@@ -63,12 +65,17 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       if (online) unawaited(_refresh(silent: true));
     });
-    _messagesSub = _messages
+    _messagesSub = _messageRepo
         .watchMessages(widget.conversation.id)
-        .listen(_onMessagesUpdated);
+        .listen((messages) {
+      if (!mounted) return;
+      setState(() => _displayMessages = messages);
+      _onMessagesUpdated(messages);
+    });
     SchedulerBinding.instance.scheduleFrameCallback((_) {
       unawaited(_markRead());
       unawaited(_refresh(silent: true));
+      unawaited(_fetchMissingMessagesIfNeeded());
     });
   }
 
@@ -100,9 +107,47 @@ class _ChatScreenState extends State<ChatScreen> {
     return widget.conversation.lastMessageAt;
   }
 
+  DateTime? _latestMessageAt(List<ChatMessage> messages) {
+    if (messages.isEmpty) return null;
+    return messages
+        .map((m) => m.createdAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+  }
+
+  bool _conversationHasNewerActivity(Conversation conversation) {
+    final lastAt = conversation.lastMessageAt;
+    if (lastAt == null) return false;
+    final latest = _latestMessageAt(_displayMessages);
+    return latest == null || lastAt.isAfter(latest);
+  }
+
+  void _mergeIncomingMessage(ChatMessage message) {
+    final index = _displayMessages.indexWhere((m) => m.id == message.id);
+    if (index >= 0) {
+      _displayMessages[index] = message;
+    } else {
+      _displayMessages = [..._displayMessages, message]
+        ..sort(ChatMessage.compareChronological);
+    }
+  }
+
+  Future<void> _fetchMissingMessagesIfNeeded({Conversation? conversation}) async {
+    if (!connectivityService.isOnline) return;
+    final conv = conversation ??
+        await _chats.getConversation(widget.conversation.id) ??
+        widget.conversation;
+    if (!_conversationHasNewerActivity(conv)) return;
+    try {
+      await _messageRepo.refreshFromApi(
+        widget.conversation.id,
+        incremental: true,
+      );
+    } catch (_) {}
+  }
+
   Future<void> _markConversationSeenOnExit() async {
     final messages =
-        await _messages.watchMessages(widget.conversation.id).first;
+        await _messageRepo.watchMessages(widget.conversation.id).first;
     await _persistSeen(messages);
   }
 
@@ -161,30 +206,39 @@ class _ChatScreenState extends State<ChatScreen> {
         final message = event.message;
         if (message == null ||
             message.conversationId != widget.conversation.id) {
-          return;
+          break;
         }
+        setState(() => _mergeIncomingMessage(message));
+        _onMessagesUpdated(_displayMessages);
         unawaited(_markRead());
-        final allMessages =
-            await _messages.watchMessages(widget.conversation.id).first;
-        if (allMessages.isNotEmpty) {
+        if (_displayMessages.isNotEmpty) {
           unawaited(
             messageAlerts.handleChatMessages(
               conversationId: widget.conversation.id,
               displayName: widget.conversation.displayName,
-              messages: allMessages,
+              messages: _displayMessages,
             ),
           );
         }
+      case 'conversation.updated':
+      case 'conversation.sync':
+        final conversation = event.conversation;
+        if (conversation != null &&
+            conversation.id == widget.conversation.id &&
+            _conversationHasNewerActivity(conversation)) {
+          unawaited(_fetchMissingMessagesIfNeeded(conversation: conversation));
+        }
       case 'order.pending':
         final order = event.order;
-        if (order != null && _sameWa(order.waId, widget.conversation.customerWaId)) {
+        if (order != null &&
+            _sameWa(order.waId, widget.conversation.customerWaId)) {
           setState(() => _pendingOrder = order);
         }
       case 'order.updated':
         final order = event.order;
         if (order == null ||
             !_sameWa(order.waId, widget.conversation.customerWaId)) {
-          return;
+          break;
         }
         setState(() {
           _pendingOrder = order.status == 'pending' ? order : null;
@@ -207,7 +261,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final hasCache = (widget.initialMessages?.isNotEmpty ?? false) ||
-        await _messages.hasLocalMessages(widget.conversation.id);
+        await _messageRepo.hasLocalMessages(widget.conversation.id);
     if (!mounted) return;
 
     final showLoading = !silent || !hasCache;
@@ -223,7 +277,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       if (showLoading) setState(() => _refreshing = false);
       final allMessages =
-          await _messages.watchMessages(widget.conversation.id).first;
+          await _messageRepo.watchMessages(widget.conversation.id).first;
       if (allMessages.isNotEmpty) {
         await messageAlerts.handleChatMessages(
           conversationId: widget.conversation.id,
@@ -285,7 +339,7 @@ class _ChatScreenState extends State<ChatScreen> {
       isTyping: false,
     );
     try {
-      final result = await _messages.sendMessage(
+      final result = await _messageRepo.sendMessage(
         conversationId: widget.conversation.id,
         customerWaId: widget.conversation.customerWaId,
         body: text,
@@ -345,6 +399,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final messages = _displayMessages;
+    final showSpinner = messages.isEmpty && _refreshing;
+    final typingOffset = _peerTyping ? 1 : 0;
+
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -364,106 +422,98 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
-      body: StreamBuilder<List<ChatMessage>>(
-        stream: _messages.watchMessages(widget.conversation.id),
-        initialData: widget.initialMessages,
-        builder: (context, snapshot) {
-          final messages = snapshot.data ?? [];
-          final showSpinner = messages.isEmpty && _refreshing;
-          final typingOffset = _peerTyping ? 1 : 0;
-
-          return Column(
-            children: [
-              if (_pendingOrder != null)
-                OrderActionsBar(
-                  order: _pendingOrder!,
-                  busy: _orderBusy,
-                  onApprove: _approveOrder,
-                  onReject: _rejectOrder,
-                ),
-              Expanded(
-                child: Container(
-                  color: WhatsAppTheme.chatBackground,
-                  child: showSpinner
-                      ? const Center(child: CircularProgressIndicator())
-                      : ListView.builder(
-                          controller: _scrollController,
-                          reverse: true,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: messages.length + typingOffset,
-                          itemBuilder: (_, i) {
-                            if (_peerTyping && i == 0) {
-                              return const TypingIndicator();
-                            }
-                            final messageIndex =
-                                messages.length - 1 - (i - typingOffset);
-                            return MessageBubble(
-                              message: messages[messageIndex],
-                            );
-                          },
-                        ),
-                ),
-              ),
-              Material(
-                color: const Color(0xFFF0F0F0),
-                child: SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _inputController,
-                            decoration: InputDecoration(
-                              hintText: 'Mensaje',
-                              filled: true,
-                              fillColor: Colors.white,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(24),
-                                borderSide: BorderSide.none,
-                              ),
-                            ),
-                            textInputAction: TextInputAction.send,
-                            onSubmitted: (_) => _send(),
-                            maxLines: 4,
-                            minLines: 1,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Material(
-                          color: WhatsAppTheme.accentGreen,
-                          shape: const CircleBorder(),
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: _sending ? null : _send,
-                            child: SizedBox(
-                              width: 48,
-                              height: 48,
-                              child: _sending
-                                  ? const Padding(
-                                      padding: EdgeInsets.all(12),
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: Colors.white,
-                                      ),
-                                    )
-                                  : const Icon(Icons.send, color: Colors.white),
-                            ),
-                          ),
-                        ),
-                      ],
+      body: Column(
+        children: [
+          if (_pendingOrder != null)
+            OrderActionsBar(
+              order: _pendingOrder!,
+              busy: _orderBusy,
+              onApprove: _approveOrder,
+              onReject: _rejectOrder,
+            ),
+          Expanded(
+            child: Container(
+              color: WhatsAppTheme.chatBackground,
+              child: showSpinner
+                  ? const Center(child: CircularProgressIndicator())
+                  : ListView.builder(
+                      controller: _scrollController,
+                      reverse: true,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      itemCount: messages.length + typingOffset,
+                      itemBuilder: (_, i) {
+                        if (_peerTyping && i == 0) {
+                          return const TypingIndicator();
+                        }
+                        final messageIndex =
+                            messages.length - 1 - (i - typingOffset);
+                        return MessageBubble(
+                          key: ValueKey(messages[messageIndex].id),
+                          message: messages[messageIndex],
+                        );
+                      },
                     ),
-                  ),
+            ),
+          ),
+          Material(
+            color: const Color(0xFFF0F0F0),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _inputController,
+                        decoration: InputDecoration(
+                          hintText: 'Mensaje',
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                        textInputAction: TextInputAction.send,
+                        textCapitalization: TextCapitalization.sentences,
+                        onSubmitted: (_) => _send(),
+                        maxLines: 4,
+                        minLines: 1,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Material(
+                      color: WhatsAppTheme.accentGreen,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _sending ? null : _send,
+                        child: SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: _sending
+                              ? const Padding(
+                                  padding: EdgeInsets.all(12),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.send, color: Colors.white),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -238,7 +238,7 @@ def list_messages(
     q = db.query(Message).filter(Message.conversation_id == conversation_id)
     if after_id is not None:
         q = q.filter(Message.id > after_id)
-    return q.order_by(Message.created_at.asc()).limit(limit).all()
+    return q.order_by(Message.created_at.asc(), Message.id.asc()).limit(limit).all()
 
 
 def mark_outgoing_delivered(db: Session, msg: Message) -> Message:

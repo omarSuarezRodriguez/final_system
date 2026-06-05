@@ -438,3 +438,28 @@ flutter test
 - Scroll animado solo vía `_onMessagesUpdated` (listener del stream) si hay mensaje nuevo y `_isNearBottom()`.
 - `chats_list_screen.dart`: precarga SQLite (`getCachedMessages`) antes del `push`; `initialData` en `StreamBuilder`.
 - `initState`: sync/mark-read diferidos con `scheduleFrameCallback` (no bloquean el primer paint).
+
+---
+
+## Chat: mensajes entrantes visibles + capitalización al escribir (v1.17) ✅
+
+- `chat_screen.dart`: lista `_displayMessages` + `setState` en el watch Drift (sin depender solo de `StreamBuilder`).
+- `message.new`: merge inmediato del payload WS en pantalla (antes de depender solo de SQLite).
+- `conversation.updated` / apertura: si el preview de la conversación es más reciente que el último mensaje local, `refreshFromApi(incremental: true)` sin pasar por el TTL del `SyncEngine`.
+- `TextField`: `textCapitalization: TextCapitalization.sentences`.
+
+---
+
+## Chat: orden cronológico + lista al recibir (v1.18) ✅
+
+- `message_dao.dart` / `ChatMessage.compareChronological`: orden estable por `createdAt` + `id`.
+- `sync_engine.dart`: `message.new` siempre actualiza la conversación (aunque el mensaje esté deduplicado).
+- `chat_repository.dart`: `mergeWithLocal` — no retrocede `lastMessageAt` con datos viejos del servidor.
+- `message_repository.dart`: al sincronizar mensajes por REST, sube el preview/timestamp de la conversación.
+- `conversation_service.py`: historial API ordenado por `created_at, id`.
+
+**Validar:** mensajes del dueño, del bot y del cliente intercalados en orden; chat sube al tope al recibir igual que al enviar.
+
+```bash
+cd whatsbot_app && flutter test && flutter analyze
+```

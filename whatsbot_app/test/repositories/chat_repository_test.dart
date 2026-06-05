@@ -63,4 +63,27 @@ void main() {
     expect(row?.lastSeenAt?.toUtc(), seenAt.toUtc());
     expect(row?.customerName, 'Otro nombre');
   });
+
+  test('mergeWithLocal no retrocede lastMessageAt', () {
+    final local = Conversation(
+      id: 1,
+      businessId: 'default',
+      customerWaId: '+5491111111111',
+      lastMessagePreview: 'Reciente',
+      lastMessageAt: DateTime.utc(2026, 6, 1, 15),
+      updatedAt: DateTime.utc(2026, 6, 1, 15),
+    );
+    final stale = Conversation(
+      id: 1,
+      businessId: 'default',
+      customerWaId: '+5491111111111',
+      lastMessagePreview: 'Viejo',
+      lastMessageAt: DateTime.utc(2026, 6, 1, 10),
+      updatedAt: DateTime.utc(2026, 6, 1, 10),
+    );
+
+    final merged = repository.mergeWithLocal(local, stale);
+    expect(merged.lastMessageAt?.toUtc(), DateTime.utc(2026, 6, 1, 15));
+    expect(merged.lastMessagePreview, 'Reciente');
+  });
 }

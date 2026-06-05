@@ -33,6 +33,13 @@ class ChatMessage {
 
   bool get isOutgoing => direction == 'outgoing' || isAdmin;
 
+  /// Orden cronológico estable (createdAt, luego id).
+  static int compareChronological(ChatMessage a, ChatMessage b) {
+    final byTime = a.createdAt.compareTo(b.createdAt);
+    if (byTime != 0) return byTime;
+    return a.id.compareTo(b.id);
+  }
+
   ChatMessage copyWith({
     String? status,
     DateTime? deliveredAt,
