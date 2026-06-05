@@ -301,3 +301,25 @@ cd whatsbot_app && flutter pub get && flutter analyze
 **Pendiente (11.5+):** ticks de estado, pedidos live, validación E2E ampliada.
 
 **Probar push:** `FCM_ENABLED=true` + JSON servicio → login en app con `google-services.json` → cerrar app → cliente escribe → notificación del sistema → tap abre chat.
+
+---
+
+## Fase 11.5 — Estados mensaje + ticks + pedidos live ✅
+
+**Hecho:**
+
+- [x] `messages.status`, `delivered_at`, `read_at` + `scripts/migrate_message_status.py`
+- [x] `POST /whatsbot/conversations/{id}/mark-read` + eventos `message.status`
+- [x] Ticks en burbujas salientes (`message_status_ticks.dart`)
+- [x] Eventos `order.pending` / `order.updated` (webhook pedido + approve/reject)
+- [x] Flutter: pedidos live sin polling REST; typing indicator v1
+- [x] `tests/test_message_status.py`
+
+```bash
+cd final_system
+python scripts/migrate_message_status.py
+python -m pytest tests/test_message_status.py -v
+cd whatsbot_app && flutter analyze
+```
+
+**Pendiente (11.6):** validación E2E ampliada, `validate_system.py`, README tiempo real.

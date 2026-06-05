@@ -57,8 +57,19 @@ def _seed_menu_from_cache(db, business_id: str) -> int:
 
 
 def main() -> int:
-    print("=== migrate_db (Fase 5) ===\n")
+    print("=== migrate_db (Fase 5+) ===\n")
     init_db()
+    try:
+        import importlib.util
+
+        status_path = ROOT / "scripts" / "migrate_message_status.py"
+        spec = importlib.util.spec_from_file_location("migrate_message_status", status_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod.main()
+    except Exception as exc:
+        print(f"  WARN message status migration: {exc}")
     with session_scope() as db:
         biz = ensure_default_business(db)
         menu_count = _seed_menu_from_cache(db, biz.id)

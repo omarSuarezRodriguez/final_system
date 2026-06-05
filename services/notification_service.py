@@ -90,7 +90,7 @@ def mirror_order_to_database(
                 return
             items = order_payload.get("items") or []
             total = float(order_payload.get("total") or 0)
-            db_orders.create_order(
+            row = db_orders.create_order(
                 db,
                 bid,
                 order_id=order_id,
@@ -103,6 +103,12 @@ def mirror_order_to_database(
                 delivery_type=str(order_payload.get("delivery_type", "")),
             )
             logger.debug("Order %s mirrored to DB for business %s", order_id, bid)
+            try:
+                from services.realtime_service import schedule_order_pending
+
+                schedule_order_pending(bid, row)
+            except Exception:
+                logger.debug("order.pending emit skipped (non-fatal)", exc_info=True)
             try:
                 from infrastructure.database import session_scope
                 from services import sheets_sync_service as sheets_svc

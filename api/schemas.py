@@ -113,6 +113,9 @@ class MessageOut(BaseModel):
     wa_id: str
     is_admin: bool
     channel: str
+    status: str = "delivered"
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

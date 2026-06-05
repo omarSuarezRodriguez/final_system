@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Union
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from config.settings import DEFAULT_BUSINESS_ID
@@ -96,6 +97,8 @@ def save_incoming_message(
         is_admin=is_admin,
         channel=channel,
         twilio_sid=twilio_sid,
+        status="delivered",
+        delivered_at=now,
         created_at=now,
     )
     db.add(msg)
@@ -145,6 +148,8 @@ def save_outgoing_message(
             is_admin=is_admin,
             channel=channel,
             twilio_sid=twilio_sid,
+            status="sent" if is_admin else "delivered",
+            delivered_at=None if is_admin else now,
             created_at=now,
         )
         db.add(msg)
@@ -211,3 +216,49 @@ def list_messages(
     if after_id is not None:
         q = q.filter(Message.id > after_id)
     return q.order_by(Message.created_at.asc()).limit(limit).all()
+
+
+def mark_outgoing_delivered(db: Session, msg: Message) -> Message:
+    """Owner/bot outgoing: sent → delivered (guardado y emitido)."""
+    if msg.direction != "outgoing" or msg.status in {"delivered", "read"}:
+        return msg
+    now = datetime.now(timezone.utc)
+    msg.status = "delivered"
+    msg.delivered_at = now
+    db.flush()
+    return msg
+
+
+def mark_conversation_read(
+    db: Session,
+    business_id: str,
+    conversation_id: int,
+) -> list[Message]:
+    """Dueño abrió el chat: incoming → read; salientes del dueño delivered → read."""
+    conv = get_conversation_for_business(db, business_id, conversation_id)
+    if conv is None:
+        return []
+    now = datetime.now(timezone.utc)
+    updated: list[Message] = []
+    rows = (
+        db.query(Message)
+        .filter(Message.conversation_id == conv.id)
+        .filter(
+            or_(
+                and_(Message.direction == "incoming", Message.read_at.is_(None)),
+                and_(
+                    Message.direction == "outgoing",
+                    Message.is_admin.is_(True),
+                    Message.status == "delivered",
+                ),
+            )
+        )
+        .all()
+    )
+    for msg in rows:
+        msg.status = "read"
+        msg.read_at = now
+        updated.append(msg)
+    if updated:
+        db.flush()
+    return updated

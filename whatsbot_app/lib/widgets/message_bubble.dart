@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../models/message.dart';
 import '../theme/whatsapp_theme.dart';
+import 'message_status_ticks.dart';
 
 class MessageBubble extends StatelessWidget {
   const MessageBubble({super.key, required this.message});
@@ -48,12 +49,21 @@ class MessageBubble extends StatelessWidget {
               style: const TextStyle(fontSize: 15, height: 1.35),
             ),
             const SizedBox(height: 2),
-            Text(
-              time,
-              style: TextStyle(
-                fontSize: 11,
-                color: WhatsAppTheme.subtitleGrey.withValues(alpha: 0.9),
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  time,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: WhatsAppTheme.subtitleGrey.withValues(alpha: 0.9),
+                  ),
+                ),
+                if (outgoing) ...[
+                  const SizedBox(width: 4),
+                  MessageStatusTicks(message: message),
+                ],
+              ],
             ),
           ],
         ),

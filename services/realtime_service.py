@@ -45,6 +45,9 @@ def serialize_message(msg: Message) -> dict[str, Any]:
         "wa_id": msg.wa_id,
         "is_admin": msg.is_admin,
         "channel": msg.channel,
+        "status": msg.status,
+        "delivered_at": _iso(msg.delivered_at),
+        "read_at": _iso(msg.read_at),
         "created_at": _iso(msg.created_at),
     }
 
@@ -73,6 +76,45 @@ def build_conversation_updated_event(conv: Conversation) -> dict[str, Any]:
     return {
         "type": "conversation.updated",
         "conversation": serialize_conversation(conv),
+    }
+
+
+def build_message_status_event(msg: Message) -> dict[str, Any]:
+    return {
+        "type": "message.status",
+        "message_id": msg.id,
+        "conversation_id": msg.conversation_id,
+        "status": msg.status,
+        "delivered_at": _iso(msg.delivered_at),
+        "read_at": _iso(msg.read_at),
+    }
+
+
+def serialize_order(order: Any) -> dict[str, Any]:
+    return {
+        "id": order.id,
+        "business_id": order.business_id,
+        "order_id": order.order_id,
+        "wa_id": order.wa_id,
+        "items": order.items,
+        "total": float(order.total or 0),
+        "status": order.status,
+        "customer_name": order.customer_name,
+        "address": order.address,
+        "delivery_type": order.delivery_type,
+        "created_at": _iso(order.created_at),
+    }
+
+
+def build_order_pending_event(order: Any) -> dict[str, Any]:
+    return {"type": "order.pending", "order": serialize_order(order)}
+
+
+def build_order_updated_event(order: Any) -> dict[str, Any]:
+    return {
+        "type": "order.updated",
+        "order": serialize_order(order),
+        "status": order.status,
     }
 
 
@@ -122,6 +164,37 @@ class RealtimeHub:
 
     def connection_count(self, business_id: str) -> int:
         return len(self._connections.get(business_id, set()))
+
+    async def broadcast_to_business(
+        self,
+        business_id: str,
+        event: dict[str, Any],
+        *,
+        exclude: WebSocket | None = None,
+    ) -> int:
+        """Broadcast to all sockets except optional exclude (typing relay)."""
+        if not REALTIME_ENABLED:
+            return 0
+        async with self._lock:
+            sockets = [
+                ws
+                for ws in self._connections.get(business_id, set())
+                if ws is not exclude
+            ]
+        if not sockets:
+            return 0
+        payload = json.dumps(event, default=str)
+        delivered = 0
+        dead: list[tuple[str, WebSocket]] = []
+        for ws in sockets:
+            try:
+                await ws.send_text(payload)
+                delivered += 1
+            except Exception:
+                dead.append((business_id, ws))
+        for bid, ws in dead:
+            await self.disconnect(bid, ws)
+        return delivered
 
     async def emit(self, business_id: str, event: dict[str, Any]) -> int:
         """Broadcast event to all sockets for business_id. Returns delivery count."""
@@ -181,6 +254,20 @@ class RealtimeHub:
             )
         elif msg_type == "pong":
             pass
+        elif msg_type in {"typing.start", "typing.stop"}:
+            conversation_id = data.get("conversation_id")
+            if conversation_id is None:
+                return
+            await self.broadcast_to_business(
+                business_id,
+                {
+                    "type": msg_type,
+                    "conversation_id": conversation_id,
+                    "business_id": business_id,
+                    "at": _iso(_utcnow()),
+                },
+                exclude=websocket,
+            )
 
 
 realtime_hub = RealtimeHub()
@@ -201,14 +288,19 @@ async def emit_message_saved(
     msg: Message,
 ) -> int:
     """Emit message.new + conversation.updated after DB commit."""
+    from services import conversation_service as conv_svc
+    from services.push_service import maybe_push_incoming_message
+
     conv = _load_conversation(db, msg)
     if conv is None:
         return 0
+    if msg.direction == "outgoing" and msg.status == "sent":
+        conv_svc.mark_outgoing_delivered(db, msg)
     event = build_message_new_event(msg, conv)
     count = await realtime_hub.emit(business_id, event)
     await realtime_hub.emit(business_id, build_conversation_updated_event(conv))
-    from services.push_service import maybe_push_incoming_message
-
+    if msg.direction == "outgoing" and msg.status == "delivered":
+        await realtime_hub.emit(business_id, build_message_status_event(msg))
     await maybe_push_incoming_message(
         db,
         business_id,
@@ -217,6 +309,34 @@ async def emit_message_saved(
         ws_delivered=count,
     )
     return count
+
+
+async def emit_message_status(
+    db: Session,
+    business_id: str,
+    msg: Message,
+) -> None:
+    await realtime_hub.emit(business_id, build_message_status_event(msg))
+
+
+async def emit_order_pending(business_id: str, order: Any) -> None:
+    await realtime_hub.emit(business_id, build_order_pending_event(order))
+
+
+async def emit_order_updated(business_id: str, order: Any) -> None:
+    await realtime_hub.emit(business_id, build_order_updated_event(order))
+
+
+def schedule_order_pending(business_id: str, order: Any) -> None:
+    realtime_hub.schedule_emit(business_id, build_order_pending_event(order))
+
+
+def schedule_order_updated(business_id: str, order: Any) -> None:
+    realtime_hub.schedule_emit(business_id, build_order_updated_event(order))
+
+
+def schedule_message_status(business_id: str, msg: Message) -> None:
+    realtime_hub.schedule_emit(business_id, build_message_status_event(msg))
 
 
 def schedule_message_saved(

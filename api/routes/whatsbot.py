@@ -53,7 +53,11 @@ from services import notification_service as notify_svc
 from services import order_service as order_svc
 from services import device_token_service as token_svc
 from services import sheets_sync_service as sheets_svc
-from services.realtime_service import emit_message_saved
+from services.realtime_service import (
+    emit_message_saved,
+    emit_message_status,
+    emit_order_updated,
+)
 
 router = APIRouter(prefix="/whatsbot", tags=["whatsbot"])
 
@@ -114,6 +118,24 @@ def list_conversation_messages(
     if not conv:
         raise HTTPException(404, detail="Conversación no encontrada")
     return conv_svc.list_messages(db, conv.id, limit=limit, after_id=after_id)
+
+
+@router.post("/conversations/{conversation_id}/mark-read", status_code=204)
+async def mark_conversation_read(
+    conversation_id: int,
+    business_id: BusinessId,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Marca mensajes como leídos cuando el dueño abre el chat."""
+    _require_business(db, business_id)
+    conv = conv_svc.get_conversation_for_business(db, business_id, conversation_id)
+    if not conv:
+        raise HTTPException(404, detail="Conversación no encontrada")
+    updated = conv_svc.mark_conversation_read(db, business_id, conversation_id)
+    db.commit()
+    for msg in updated:
+        await emit_message_status(db, business_id, msg)
+    return Response(status_code=204)
 
 
 @router.post("/messages", response_model=MessageOut, status_code=201)
@@ -194,20 +216,25 @@ def list_pending_orders(
 
 
 @router.post("/orders/{order_id}/approve", response_model=OrderActionResponse)
-def approve_order(
+async def approve_order(
     order_id: str,
     business_id: BusinessId,
+    db: Session = Depends(get_db),
 ) -> OrderActionResponse:
     """Aprueba pedido y notifica al cliente (legacy Sheets + Twilio)."""
     result = notify_svc.approve_order_from_app(order_id, business_id=business_id)
+    row = order_svc.get_order(db, business_id, order_id.upper().strip())
+    if row:
+        await emit_order_updated(business_id, row)
     return OrderActionResponse(ok=result.get("ok", False), message=result.get("message", ""))
 
 
 @router.post("/orders/{order_id}/reject", response_model=OrderActionResponse)
-def reject_order(
+async def reject_order(
     order_id: str,
     business_id: BusinessId,
     reason: str = "",
+    db: Session = Depends(get_db),
 ) -> OrderActionResponse:
     """Rechaza pedido y avisa al cliente."""
     result = notify_svc.reject_order_from_app(
@@ -215,6 +242,9 @@ def reject_order(
         business_id=business_id,
         reason=reason,
     )
+    row = order_svc.get_order(db, business_id, order_id.upper().strip())
+    if row:
+        await emit_order_updated(business_id, row)
     return OrderActionResponse(ok=result.get("ok", False), message=result.get("message", ""))
 
 

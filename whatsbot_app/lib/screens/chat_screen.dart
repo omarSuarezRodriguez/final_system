@@ -12,6 +12,7 @@ import '../services/message_alerts_service.dart';
 import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/typing_indicator.dart';
 import 'order_actions_bar.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -31,7 +32,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   bool _sending = false;
   bool _orderBusy = false;
+  bool _peerTyping = false;
   Timer? _fallbackTimer;
+  Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectionSub;
 
@@ -39,23 +42,56 @@ class _ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     messageAlerts.setActiveConversation(widget.conversation.id);
+    _inputController.addListener(_onInputChanged);
     _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
     _connectionSub = realtimeService.connectionState.listen((_) {
       _configureFallbackTimer();
     });
     _refresh();
     _configureFallbackTimer();
+    unawaited(_markRead());
   }
 
   @override
   void dispose() {
+    realtimeService.sendTyping(
+      conversationId: widget.conversation.id,
+      isTyping: false,
+    );
     messageAlerts.setActiveConversation(null);
+    _inputController.removeListener(_onInputChanged);
     _realtimeSub?.cancel();
     _connectionSub?.cancel();
     _fallbackTimer?.cancel();
+    _typingStopTimer?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _markRead() async {
+    try {
+      await apiClient.markConversationRead(widget.conversation.id);
+      messageAlerts.markConversationSeen(widget.conversation.id);
+    } catch (_) {}
+  }
+
+  void _onInputChanged() {
+    if (!realtimeService.isConnected) return;
+    final hasText = _inputController.text.trim().isNotEmpty;
+    realtimeService.sendTyping(
+      conversationId: widget.conversation.id,
+      isTyping: hasText,
+    );
+    _typingStopTimer?.cancel();
+    if (hasText) {
+      _typingStopTimer = Timer(const Duration(seconds: 2), () {
+        realtimeService.sendTyping(
+          conversationId: widget.conversation.id,
+          isTyping: false,
+        );
+      });
+    }
   }
 
   void _configureFallbackTimer() {
@@ -71,20 +107,57 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onRealtimeEvent(RealtimeEvent event) {
     if (!mounted) return;
 
-    if (event.type == 'message.new') {
-      final message = event.message;
-      if (message == null ||
-          message.conversationId != widget.conversation.id) {
-        return;
-      }
-      _appendMessage(message);
-      unawaited(
-        messageAlerts.handleChatMessages(
-          conversationId: widget.conversation.id,
-          displayName: widget.conversation.displayName,
-          messages: _messages,
-        ),
-      );
+    switch (event.type) {
+      case 'message.new':
+        final message = event.message;
+        if (message == null ||
+            message.conversationId != widget.conversation.id) {
+          return;
+        }
+        _appendMessage(message);
+        unawaited(
+          messageAlerts.handleChatMessages(
+            conversationId: widget.conversation.id,
+            displayName: widget.conversation.displayName,
+            messages: _messages,
+          ),
+        );
+        unawaited(_markRead());
+      case 'message.status':
+        final messageId = event.messageId;
+        if (messageId == null ||
+            event.conversationId != widget.conversation.id) {
+          return;
+        }
+        final index = _messages.indexWhere((item) => item.id == messageId);
+        if (index < 0) return;
+        setState(() {
+          _messages[index] = _messages[index].copyWith(
+            status: event.status ?? _messages[index].status,
+          );
+        });
+      case 'order.pending':
+        final order = event.order;
+        if (order != null && _sameWa(order.waId, widget.conversation.customerWaId)) {
+          setState(() => _pendingOrder = order);
+        }
+      case 'order.updated':
+        final order = event.order;
+        if (order == null ||
+            !_sameWa(order.waId, widget.conversation.customerWaId)) {
+          return;
+        }
+        setState(() {
+          _pendingOrder = order.status == 'pending' ? order : null;
+        });
+      case 'typing.start':
+        if (event.conversationId == widget.conversation.id) {
+          setState(() => _peerTyping = true);
+        }
+      case 'typing.stop':
+        if (event.conversationId == widget.conversation.id) {
+          setState(() => _peerTyping = false);
+        }
     }
   }
 
@@ -110,14 +183,8 @@ class _ChatScreenState extends State<ChatScreen> {
               afterId: afterId,
             )
           : await apiClient.getMessages(widget.conversation.id);
-      final orders = await apiClient.getPendingOrders();
-      final wa = widget.conversation.customerWaId;
-      PendingOrder? match;
-      for (final o in orders) {
-        if (_sameWa(o.waId, wa)) {
-          match = o;
-          break;
-        }
+      if (!silent && _pendingOrder == null) {
+        await _loadPendingOrderOnce();
       }
       if (!mounted) return;
       setState(() {
@@ -127,10 +194,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ..._messages,
             ...messages.where((m) => !known.contains(m.id)),
           ];
-        } else {
+        } else if (!incremental) {
           _messages = messages;
         }
-        _pendingOrder = match;
         _loading = false;
       });
       await messageAlerts.handleChatMessages(
@@ -142,6 +208,17 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _loadPendingOrderOnce() async {
+    final orders = await apiClient.getPendingOrders();
+    final wa = widget.conversation.customerWaId;
+    for (final o in orders) {
+      if (_sameWa(o.waId, wa)) {
+        _pendingOrder = o;
+        return;
+      }
     }
   }
 
@@ -167,6 +244,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
     _inputController.clear();
+    realtimeService.sendTyping(
+      conversationId: widget.conversation.id,
+      isTyping: false,
+    );
     try {
       final msg = await apiClient.sendMessage(
         customerWaId: widget.conversation.customerWaId,
@@ -192,7 +273,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final msg = await apiClient.approveOrder(order.orderId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      await _refresh(silent: true);
+      setState(() => _pendingOrder = null);
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -211,7 +292,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final msg = await apiClient.rejectOrder(order.orderId);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-      await _refresh(silent: true);
+      setState(() => _pendingOrder = null);
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -231,8 +312,14 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             Text(widget.conversation.displayName),
             Text(
-              widget.conversation.customerWaId,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+              _peerTyping
+                  ? 'escribiendo…'
+                  : widget.conversation.customerWaId,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.normal,
+                fontStyle: _peerTyping ? FontStyle.italic : FontStyle.normal,
+              ),
             ),
           ],
         ),
@@ -254,8 +341,13 @@ class _ChatScreenState extends State<ChatScreen> {
                   : ListView.builder(
                       controller: _scrollController,
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: _messages.length,
-                      itemBuilder: (_, i) => MessageBubble(message: _messages[i]),
+                      itemCount: _messages.length + (_peerTyping ? 1 : 0),
+                      itemBuilder: (_, i) {
+                        if (_peerTyping && i == _messages.length) {
+                          return const TypingIndicator();
+                        }
+                        return MessageBubble(message: _messages[i]);
+                      },
                     ),
             ),
           ),

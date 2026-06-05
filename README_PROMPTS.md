@@ -1,4 +1,4 @@
-## v1.3
+## v1.4
 
 
 
@@ -679,7 +679,69 @@ Si ves el icono de nube en el AppBar, el WS no está conectado y entra el fallba
 
 
 ###########################################################
+## v1.3
 
+## prompt ##
+
+Sí
+
+
+## Resp cursor ##
+
+**Subfase 11.4 completada.** Push FCM/APNs en backend y Flutter; 27 tests pasan; `flutter analyze` limpio.
+
+## Backend
+
+| Componente | Detalle |
+|------------|---------|
+| `models/device_token.py` | Tabla `device_tokens` por negocio |
+| `services/push_service.py` | Firebase Admin SDK; push solo si **no hay WS** y mensaje **entrante** |
+| API | `POST /whatsbot/device-token`, `DELETE /whatsbot/device-token` |
+| Config | `FCM_ENABLED`, `FCM_SERVICE_ACCOUNT_JSON_PATH` en `.env` |
+| Hook | Tras `emit_message_saved` → `maybe_push_incoming_message` |
+
+## Flutter
+
+| Componente | Detalle |
+|------------|---------|
+| `lib/services/push_service.dart` | Registro token en login; tap en notificación → abre chat |
+| Degradación | Sin `google-services.json` la app sigue con WS + notificaciones locales |
+| Logout | Desregistra token en servidor |
+
+## Configurar push (cuando quieras activarlo)
+
+1. Firebase Console → apps Android + iOS  
+2. `google-services.json` → `whatsbot_app/android/app/`  
+3. `GoogleService-Info.plist` → `whatsbot_app/ios/Runner/`  
+4. Clave de servicio JSON → `final_system/credentials/firebase-service-account.json`  
+5. En `.env`:
+   ```env
+   FCM_ENABLED=true
+   FCM_SERVICE_ACCOUNT_JSON_PATH=credentials/firebase-service-account.json
+   ```
+6. `python -m pip install -r requirements.txt` y reiniciar API  
+7. Recompilar app: `flutter run`
+
+Guía completa en `docs/FLUTTER_APP.md`.
+
+## Flujo
+
+```
+Cliente escribe → webhook → BD → WS (si app abierta)
+                              └→ FCM (si ningún WS conectado)
+```
+
+---
+
+¿Procedo con **11.5** (estados de mensaje, ticks ✓/✓✓, pedidos live)?
+
+
+
+
+
+
+#########################################################
+## v1.4
 
 
 

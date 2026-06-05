@@ -63,6 +63,13 @@ class RealtimeService {
     await _syncAfterReconnect();
   }
 
+  void sendTyping({required int conversationId, required bool isTyping}) {
+    _sendJson({
+      'type': isTyping ? 'typing.start' : 'typing.stop',
+      'conversation_id': conversationId,
+    });
+  }
+
   Future<void> _openSocket() async {
     if (_connecting || _intentionalDisconnect || !apiClient.isLoggedIn) {
       return;

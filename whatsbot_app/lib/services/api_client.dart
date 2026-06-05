@@ -104,6 +104,14 @@ class ApiClient {
         .toList();
   }
 
+  Future<void> markConversationRead(int conversationId) async {
+    final response = await _http.post(
+      _uri('/whatsbot/conversations/$conversationId/mark-read'),
+      headers: _authHeaders,
+    );
+    _ensureOk(response, expected: {204, 200});
+  }
+
   Future<List<ChatMessage>> getMessages(
     int conversationId, {
     int? afterId,
