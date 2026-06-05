@@ -1,4 +1,4 @@
-## v1.10
+## v1.11
 
 
 
@@ -1313,6 +1313,11 @@ Nota documentada en `docs/INCREMENTAL_GUIDE.md`. Para probar en el dispositivo c
 
 
 ##########################################################
+## v1.11
+
+
+## prompt ##
+
 
 
 
