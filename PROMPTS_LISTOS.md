@@ -15,22 +15,26 @@
 | 4 | Un prompt = una fase. No combines fases. |
 | 5 | Tras cada fase: `Sí, continúa con la Fase N` o pega el siguiente prompt |
 
-## Orden de fases (10 fases + validación)
+## Orden de fases
 
-| Prompt | Fase | Contenido |
-|--------|------|-----------|
-| 0 (opc.) | — | Verificar que el proyecto llegó |
-| 1 | 0 | Análisis sin código |
-| 2 | 1 | Scaffold `final_system/` |
-| 3 | 2 | Gateway + chatbot copiado |
-| 4 | 3 | Config centralizada |
-| 5 | 4 | API + webhook + guardar mensajes en BD |
-| 6 | 5 | Multi-negocio + modelos |
-| 7 | 6 | Pedidos + ADMIN WhatsApp legacy |
-| 8 | 7 | API REST + menú/intents/prompts por negocio (BD) |
-| 9 | 8 | Google Sheets opcional |
-| 10 | 9 | **App Flutter** + editores Menú/Intents/Mensajes |
-| 11 | 10 | Validación final + README |
+| Prompt | Fase | Contenido | Estado |
+|--------|------|-----------|--------|
+| 0 (opc.) | — | Verificar que el proyecto llegó | — |
+| 1 | 0 | Análisis sin código | ✅ |
+| 2 | 1 | Scaffold `final_system/` | ✅ |
+| 3 | 2 | Gateway + chatbot copiado | ✅ |
+| 4 | 3 | Config centralizada | ✅ |
+| 5 | 4 | API + webhook + guardar mensajes en BD | ✅ |
+| 6 | 5 | Multi-negocio + modelos | ✅ |
+| 7 | 6 | Pedidos + ADMIN WhatsApp legacy | ✅ |
+| 8 | 7 | API REST + menú/intents/prompts por negocio (BD) | ✅ |
+| 9 | 8 | Google Sheets opcional | ✅ |
+| 10 | 9 | **App Flutter** + editores Menú/Intents/Mensajes | ✅ |
+| 11 | 10 | Validación final + README | ✅ |
+| 12–17 | 11.1–11.6 | **Tiempo real** (WS + FCM + ticks + E2E) | ✅ |
+| 18+ | 12+ | Producción / escala / mejoras (ver abajo) | pendiente |
+
+> **Estado actual del repo:** WebSocket tiempo real, push FCM (opcional), estados de mensaje, API `0.9.0`. Ver `docs/INCREMENTAL_GUIDE.md` Fase 11.
 
 ---
 
@@ -429,18 +433,204 @@ Ejecuta solo esta fase según PROMPTS_LISTOS.md Prompt [N+1].
 
 ---
 
+## Fase 11 — Tiempo real (paridad lógica con WhatsApp) ✅
+
+Un chat por subfase. Cada prompt empieza con `@PROMPT_EVOLUCION_SAAS_WHATSBOT.md` + archivos de contexto.
+
+### Prompt 12 — Fase 11.1: Análisis (SIN código)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@README.md
+@docs/FLUTTER_APP.md
+@docs/ARCHITECTURE.md
+
+Ejecuta SOLO Subfase 11.1 (análisis, sin modificar código).
+
+Contexto: app con UI tipo WhatsApp; hoy WS no existía (o ya existe si relees el repo).
+
+Entregables:
+1. Mapa de archivos a tocar
+2. Diagrama de eventos
+3. Decisión WS vs SSE (justificar)
+4. Plan migración polling → realtime sin downtime
+5. Plan subfases 11.2–11.6
+
+Espera mi "Sí" antes de 11.2.
+```
+
+### Prompt 13 — Fase 11.2: Backend WebSocket
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+Ejecuta SOLO Subfase 11.2.
+
+- WS autenticado `WS /whatsbot/ws?token=JWT`
+- Hub por business_id; eventos message.new, conversation.updated
+- Hooks tras commit en whatsapp.py y whatsbot.py
+- REST ?since= / ?after_id=
+- tests/test_realtime_ws.py
+- Nota en docs/INCREMENTAL_GUIDE.md
+
+validate_chatbot.py + pytest al cerrar. Espera mi "Sí" para 11.3.
+```
+
+### Prompt 14 — Fase 11.3: Flutter WebSocket
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/FLUTTER_APP.md
+
+Ejecuta SOLO Subfase 11.3.
+
+- RealtimeService (WS + reconexión backoff + sync)
+- Integrar chats_list_screen y chat_screen
+- Eliminar polling 4s/8s; fallback REST 30s si WS cae
+- flutter analyze sin issues
+
+Espera mi "Sí" para 11.4.
+```
+
+### Prompt 15 — Fase 11.4: Push FCM/APNs
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/FLUTTER_APP.md
+
+Ejecuta SOLO Subfase 11.4.
+
+- Tabla device_tokens + POST/DELETE /whatsbot/device-token
+- push_service.py (Firebase Admin, secrets en .env servidor)
+- Flutter push_service.dart + deep link a conversación
+- Guía Firebase en docs/FLUTTER_APP.md
+- tests/test_push_api.py
+
+Sin FCM configurado: WS + notificaciones locales siguen funcionando.
+
+Espera mi "Sí" para 11.5.
+```
+
+### Prompt 16 — Fase 11.5: Estados + ticks + pedidos live
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+
+Ejecuta SOLO Subfase 11.5.
+
+- messages.status, delivered_at, read_at + migrate_message_status.py
+- POST mark-read + eventos message.status
+- Ticks UI en burbujas salientes
+- order.pending / order.updated por WS
+- typing indicator v1 (dueño escribe)
+
+Espera mi "Sí" para 11.6.
+```
+
+### Prompt 17 — Fase 11.6: Validación E2E
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@README.md
+
+Ejecuta SOLO Subfase 11.6.
+
+- Ampliar scripts/validate_system.py (WS, device-token, mark-read)
+- README sección tiempo real + checklist Fase 11
+- docs/ARCHITECTURE.md actualizado
+- pytest 29+ passed, flutter analyze limpio
+- Cerrar nota en INCREMENTAL_GUIDE.md
+```
+
+---
+
+## Fase 12+ — Próximas mejoras (pendiente, elegir una)
+
+### Prompt 18 — Producción Railway / ngrok estable
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@README.md
+
+Despliegue producción WhatsBot:
+- API en Railway (o similar) con PostgreSQL + REALTIME_ENABLED=true
+- WebSocket detrás de proxy (timeouts, HTTPS)
+- Variables .env documentadas
+- Checklist: webhook Twilio, app Flutter con API_PUBLIC_URL HTTPS
+- Sin romper chatbot local
+
+Entregable: docs/DEPLOY.md + comandos copy-paste.
+```
+
+### Prompt 19 — Firebase push en producción (manual guiado)
+
+```
+@docs/FLUTTER_APP.md
+
+Configurar FCM de punta a punta (yo tengo cuenta Firebase):
+1. Pasos Android google-services.json
+2. Pasos iOS GoogleService-Info.plist + APNs
+3. FCM_ENABLED=true en servidor
+4. Prueba: app cerrada → cliente escribe → push → tap abre chat
+
+Solo guía y verificación; no inventar credenciales.
+```
+
+### Prompt 20 — Redis multi-instancia (escala)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/ARCHITECTURE.md
+
+REALTIME con varias réplicas API:
+- Pub/sub Redis para realtime_hub (REDIS_URL ya en .env.example)
+- Misma API de eventos; tests con mock Redis
+- Documentar cuándo hace falta vs single-instance
+
+Cambio mínimo; sin tocar gateway ni intents.
+```
+
+### Prompt 21 — Segundo negocio en producción
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/GUIA_NEGOCIOS.md
+
+Alta negocio "[nombre]":
+- onboard_business.py con Twilio/Admin que te doy
+- Webhook Twilio del nuevo número
+- Prueba: login app con business_id nuevo
+- Cliente escribe al bot → tiempo real en app
+```
+
+### Prompt 22 — Mejora incremental (plantilla)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+
+Sistema en final_system/ con Fase 11 cerrada.
+
+MEJORA: [una frase concreta]
+
+REGLAS:
+- Cambio mínimo; no tocar chatbot/gateway lógica
+- UI solo Flutter
+- validate_system.py + pytest si toca API
+- Nota en docs/INCREMENTAL_GUIDE.md
+```
+
+---
+
 ## Resumen visual del flujo
 
 ```
-F0 Análisis
- → F1 Scaffold (+ carpeta whatsbot_app/)
- → F2 Gateway
- → F3 Config
- → F4 Webhook + mensajes en BD
- → F5 Multi-negocio
- → F6 Pedidos + ADMIN legacy
- → F7 API JSON (para Flutter)
- → F8 Sheets opcional
- → F9 App Flutter UI WhatsApp  ← la app del dueño
- → F10 Validación + README
+F0–F10  Base SaaS (bot + API + Flutter)                    ✅
+F11.1   Análisis tiempo real
+F11.2   Backend WS + eventos
+F11.3   Flutter WS (sin polling principal)
+F11.4   FCM/APNs
+F11.5   Ticks + pedidos live
+F11.6   Validación E2E                                      ✅ Fase 11 cerrada
+F12+    Producción / Firebase real / Redis / más negocios   → elegir Prompt 18–22
 ```
