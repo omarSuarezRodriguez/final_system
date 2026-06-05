@@ -208,6 +208,45 @@ Automatizado en `scripts/validate_system.py` (gateway, API, pedido, edición BD)
 
 ---
 
+## Tiempo real (Fase 11)
+
+Comportamiento tipo WhatsApp: mensajes al instante, push con app cerrada, ticks de estado.
+
+| Capa | Qué hace |
+|------|----------|
+| **WebSocket** | `WS /whatsbot/ws?token=JWT` — eventos live (`message.new`, `order.pending`, …) |
+| **FCM/APNs** | Push si el dueño no tiene WS activo (`FCM_ENABLED=true` + credenciales servidor) |
+| **REST sync** | `?since=` / `?after_id=` al reconectar; fallback 30 s si WS cae |
+| **Estados** | `sent` → `delivered` → `read`; ticks en burbujas salientes del dueño |
+
+### Variables `.env` (Fase 11)
+
+```env
+REALTIME_ENABLED=true
+WS_HEARTBEAT_SECONDS=30
+FCM_ENABLED=false
+FCM_SERVICE_ACCOUNT_JSON_PATH=credentials/firebase-service-account.json
+```
+
+Migración BD mensajes: `python scripts/migrate_message_status.py` (o `python scripts/migrate_db.py`).
+
+Setup Firebase en app: `docs/FLUTTER_APP.md` sección **Push FCM/APNs**.
+
+### Checklist E2E tiempo real (Fase 11)
+
+| Ítem | Automatizado | Manual |
+|------|--------------|--------|
+| Cliente escribe → dueño ve en &lt;1 s (app abierta, sin polling) | `validate_system` WS | WhatsApp real |
+| WS reconecta + sync `since`/`after_id` | tests realtime | WiFi on/off |
+| Registro device token | `validate_system` | — |
+| mark-read + status en BD | `test_message_status` | Abrir chat en app |
+| Pedido → `order.pending` en WS | tests + mirror hook | Pedido real |
+| Push FCM app cerrada | — | Firebase configurado |
+| Sin FCM → WS + notif. locales | degradación documentada | `FCM_ENABLED=false` |
+| Dos teléfonos mismo negocio | `test_realtime_ws` broadcast | 2 dispositivos |
+
+---
+
 ## Validación (salidas de referencia)
 
 Ejecutar desde `final_system/`:
@@ -248,39 +287,21 @@ Ver sección **Resultados de validación** al final de este README (actualizada 
 
 ---
 
-## Resultados de validación (Fase 10)
+## Resultados de validación (Fase 10 + 11)
 
-Ejecutado el 2026-06-04 desde `final_system/`:
+Ejecutar desde `final_system/`:
 
+```bash
+python scripts/validate_chatbot.py
+python scripts/validate_api.py
+python scripts/migrate_message_status.py   # si BD existía antes de Fase 11.5
+python scripts/validate_system.py
+python -m pytest tests/ -q
+cd whatsbot_app && flutter analyze
 ```
-=== validate_chatbot (Fase 2+) ===
-  OK  import chatbot.gateway
-  OK  get_bot_context()
-  OK  hola -> respuesta (256 chars)
-  OK  menu -> incluye contenido de menu
-  OK  business_id passthrough
-  OK  admin -> is_admin + respuesta
-=== Resultado: 0 fallo(s) ===
 
-=== validate_api (Fase 4) ===
-  OK  create_app + init_db
-  OK  GET /health
-  OK  POST /webhook -> TwiML
-  OK  incoming message in DB
-=== Resultado: 0 fallo(s) ===
+Salida esperada: **0 fallos** en scripts de validación, **29 passed** en pytest, **No issues found!** en Flutter.
 
-=== validate_system (Fase 10 — E2E) ===
-  OK  init_db + default business
-  OK  gateway hola / menu
-  OK  GET /health, POST /webhook, mensaje en BD
-  OK  POST /auth/login, GET /whatsbot/conversations
-  OK  notify admin, approve desde app, cliente notificado
-  OK  menu y prompts editados en app visibles en gateway
-=== Resultado: 0 fallo(s) ===
-
-pytest tests/ -q  →  15 passed
-flutter analyze     →  No issues found!
-GET /health         →  {"status":"ok","service":"whatsbot-api","version":"0.8.0"}
-```
+`GET /health` incluye `realtime_enabled` y `fcm_enabled`.
 
 API en ejecución local: `python -m api.main` con `DATABASE_URL=sqlite:///data/whatsbot.db`.

@@ -593,3 +593,139 @@ Cliente: Mensaje cliente WS test
 Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
 
 #################################################################
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: Hola *Test*, Bienvenido a *La Casa del Sabor*.
+*Nuestro menú*
+
+*Test*
+• Plato Validate System — $7.50
+
+¿Deseas hacer un pedido o reservar una mesa?
+
+Escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+#################################################################
+################################################################
+
+Cliente: menu
+
+
+-------------------------------
+
+Chatbot: *Nuestro menú*
+
+*Test*
+• Plato Validate System — $7.50
+
+
+
+Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+---
+Escribe *inicio* para volver al inicio
+
+#################################################################
+################################################################
+
+Cliente: hola desde validate_system
+
+
+-------------------------------
+
+Chatbot: Hola *Validate E2E*, Bienvenido a *La Casa del Sabor*.
+*Nuestro menú*
+
+*Test*
+• Plato Validate System — $7.50
+
+¿Deseas hacer un pedido o reservar una mesa?
+
+Escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+#################################################################
+################################################################
+
+Cliente: menu
+
+
+-------------------------------
+
+Chatbot: *Nuestro menú*
+
+*Test*
+• Plato Validate System — $7.50
+
+
+
+Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+---
+Escribe *inicio* para volver al inicio
+
+#################################################################
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: BIENVENIDA_VALIDATE_SYSTEM
+
+#################################################################
+################################################################
+
+Cliente: Mensaje para leer
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: Mensaje cliente WS test
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: MENSAJE_CUSTOM_FASE7 vacio
+
+#################################################################
+################################################################
+
+Cliente: menu
+
+
+-------------------------------
+
+Chatbot: *Nuestro menú*
+
+*Platos*
+• Sopa Gateway BD — $5.00
+
+
+
+Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+---
+Escribe *inicio* para volver al inicio
+
+#################################################################

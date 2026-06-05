@@ -1,4 +1,4 @@
-## v1.4
+## v1.5
 
 
 
@@ -742,6 +742,84 @@ Cliente escribe → webhook → BD → WS (si app abierta)
 
 #########################################################
 ## v1.4
+
+
+
+## prompt ##
+
+si
+
+
+## resp cursor ##
+
+
+
+
+**Subfase 11.5 completada.** 29 tests pasan; `flutter analyze` limpio.
+
+## Backend
+
+| Cambio | Detalle |
+|--------|---------|
+| **BD** | `messages.status`, `delivered_at`, `read_at` |
+| **Migración** | `python scripts/migrate_message_status.py` (también en `migrate_db.py`) |
+| **Estados** | Entrante → `delivered`; saliente dueño → `sent` → `delivered` tras WS |
+| **Mark read** | `POST /whatsbot/conversations/{id}/mark-read` → incoming `read` + ticks azules en salientes del dueño |
+| **WS** | `message.status`, `order.pending`, `order.updated`, `typing.start/stop` |
+| **Pedidos** | Emitidos al crear pedido en BD y al aprobar/rechazar |
+
+## Flutter
+
+| Cambio | Detalle |
+|--------|---------|
+| **Ticks** | `message_status_ticks.dart` — ✓ gris (sent), ✓✓ gris (delivered), ✓✓ azul (read) |
+| **Chat** | `mark-read` al abrir; escucha `message.status` y pedidos live |
+| **Pedidos** | Barra Aprobar/Rechazar vía WS (sin polling REST en refresh) |
+| **Typing** | Indicador “escribiendo…” vía WS al escribir en el input |
+
+## Migración en tu entorno
+
+Si ya tenías BD creada antes de esta fase:
+
+```bash
+cd final_system
+python scripts/migrate_message_status.py
+```
+
+Luego reinicia API y recompila la app.
+
+---
+
+## Cómo probar
+
+1. Dueño envía mensaje → ticks ✓✓ grises al instante  
+2. Abre chat con mensajes entrantes → `mark-read` → entrantes marcados leídos  
+3. Cliente hace pedido → barra amarilla aparece sin refrescar manual  
+4. Escribir en el input → evento typing (visible en otro dispositivo conectado al mismo negocio)
+
+---
+
+¿Procedo con **11.6** (validación E2E, `validate_system.py`, README)?
+
+
+
+
+
+##########################################################
+## v1.5
+
+
+
+## prompt ##
+
+Sí
+
+
+## resp cursor ##
+
+
+
+
 
 
 

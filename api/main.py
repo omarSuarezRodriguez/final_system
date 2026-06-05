@@ -76,7 +76,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="WhatsBot API",
         description="Backend JSON + webhook Twilio (sin UI web)",
-        version="0.8.0",
+        version="0.9.0",
         lifespan=lifespan,
     )
 
@@ -103,7 +103,7 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "service": "whatsbot-api",
-            "version": "0.8.0",
+            "version": "0.9.0",
             "restaurant": RESTAURANT_NAME,
             "default_business_id": DEFAULT_BUSINESS_ID,
             "api_public_url": API_PUBLIC_URL,

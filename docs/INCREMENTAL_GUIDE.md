@@ -323,3 +323,25 @@ cd whatsbot_app && flutter analyze
 ```
 
 **Pendiente (11.6):** validación E2E ampliada, `validate_system.py`, README tiempo real.
+
+---
+
+## Fase 11.6 — Validación E2E ✅
+
+**Hecho:**
+
+- [x] `scripts/validate_system.py` — WS connect, ping/pong, `message.new`, device-token, mark-read, `?since=`
+- [x] Migración status en validate setup
+- [x] `README.md` — sección tiempo real + checklist Fase 11
+- [x] `docs/ARCHITECTURE.md` — diagrama WS + FCM
+- [x] API `0.9.0`; 29 tests pytest; `flutter analyze` limpio
+
+```bash
+cd final_system
+python scripts/migrate_message_status.py
+python scripts/validate_system.py
+python -m pytest tests/ -q
+cd whatsbot_app && flutter analyze
+```
+
+**Fase 11 cerrada.** Próximo trabajo fuera de alcance: Redis pub/sub multi-instancia, read receipts Twilio, typing desde cliente WA.

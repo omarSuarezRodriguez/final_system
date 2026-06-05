@@ -18,7 +18,7 @@ Dueño       → App Flutter WhatsBot (JWT, mismo negocio)
 Dueño       → ADMIN_WHATSAPP_NUMBER (confirmación legacy, se mantiene)
 ```
 
-## Flujo objetivo (post Fase 10)
+## Flujo objetivo (Fase 11 — tiempo real)
 
 ```mermaid
 flowchart LR
@@ -26,12 +26,23 @@ flowchart LR
     T --> API[api/routes/whatsapp.py]
     API --> GW[chatbot/gateway.py]
     GW --> CB[chatbot legacy]
-    API --> DB[(PostgreSQL)]
-    APP[Flutter WhatsBot] --> WB[api/routes/whatsbot.py]
+    API --> DB[(PostgreSQL/SQLite)]
+    API --> RT[services/realtime_service.py]
+    RT --> WS[WS /whatsbot/ws]
+    RT --> FCM[services/push_service.py]
+    WS --> APP[Flutter WhatsBot]
+    FCM --> APP
+    APP --> WB[api/routes/whatsbot.py]
     WB --> DB
     WB --> TC[infrastructure/twilio_client.py]
     ADM[ADMIN_WHATSAPP_NUMBER] --> NS[notification_service]
 ```
+
+| Canal | Cuándo | Uso |
+|-------|--------|-----|
+| WebSocket | App abierta, `REALTIME_ENABLED=true` | `message.new`, `order.pending`, ticks |
+| FCM/APNs | App background/cerrada, `FCM_ENABLED=true` | Push si no hay WS activo |
+| REST fallback | WS caído | `?since=` / `?after_id=` cada 30 s |
 
 ## Capas `final_system/`
 

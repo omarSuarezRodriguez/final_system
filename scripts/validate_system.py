@@ -1,7 +1,9 @@
-"""End-to-end validation — Fase 10 (gateway + API + flujo pedido)."""
+"""End-to-end validation — Fase 10 + realtime Fase 11."""
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -17,6 +19,19 @@ os.environ.setdefault(
 os.environ.setdefault("JWT_SECRET_KEY", "validate-system-jwt")
 os.environ.setdefault("WHATSBOT_OWNER_PIN", "validate-pin")
 os.environ.setdefault("GOOGLE_SHEETS_ENABLED", "false")
+os.environ.setdefault("REALTIME_ENABLED", "true")
+os.environ.setdefault("FCM_ENABLED", "false")
+
+
+def _migrate_message_status() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "migrate_message_status",
+        ROOT / "scripts" / "migrate_message_status.py",
+    )
+    if spec and spec.loader:
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.main()
 
 
 def _ok(label: str) -> None:
@@ -28,8 +43,10 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 def main() -> int:
-    print("=== validate_system (Fase 10 — E2E) ===\n")
+    print("=== validate_system (Fase 10 + 11 — E2E) ===\n")
     failures = 0
+    client = None
+    headers: dict[str, str] = {}
 
     # --- Setup ---
     try:
@@ -38,6 +55,7 @@ def main() -> int:
         from chatbot.runtime import reset_bot_context
 
         init_db()
+        _migrate_message_status()
         reset_bot_context()
         with session_scope() as db:
             ensure_default_business(db)
@@ -93,8 +111,14 @@ def main() -> int:
         client = TestClient(create_app())
 
         r = client.get("/health")
-        if r.status_code == 200 and r.json().get("status") == "ok":
+        health = r.json() if r.status_code == 200 else {}
+        if r.status_code == 200 and health.get("status") == "ok":
             _ok("GET /health")
+            if health.get("realtime_enabled"):
+                _ok("health realtime_enabled=true")
+            else:
+                _fail("health realtime_enabled", str(health))
+                failures += 1
         else:
             _fail("GET /health", str(r.status_code))
             failures += 1
@@ -280,6 +304,106 @@ def main() -> int:
             failures += 1
     except Exception as exc:
         _fail("edición BD", str(exc))
+        failures += 1
+
+    # --- 6. Realtime WebSocket + estados (Fase 11) ---
+    print("\n--- Realtime (Fase 11) ---")
+    try:
+        if not headers:
+            raise RuntimeError("sin JWT de login")
+
+        r = client.post(
+            "/whatsbot/device-token",
+            headers=headers,
+            json={"token": "validate-fcm-token-e2e", "platform": "android"},
+        )
+        if r.status_code == 204:
+            _ok("POST /whatsbot/device-token")
+        else:
+            _fail("device-token", str(r.status_code))
+            failures += 1
+
+        with client.websocket_connect(
+            f"/whatsbot/ws?token={headers['Authorization'].split(' ', 1)[1]}"
+        ) as ws:
+            hello = json.loads(ws.receive_text())
+            if hello.get("type") == "connected":
+                _ok("WS /whatsbot/ws connected")
+            else:
+                _fail("WS connected", str(hello))
+                failures += 1
+
+            ws.send_text(json.dumps({"type": "ping"}))
+            pong = json.loads(ws.receive_text())
+            if pong.get("type") == "pong":
+                _ok("WS ping/pong")
+            else:
+                _fail("WS pong", str(pong))
+                failures += 1
+
+            with patch("infrastructure.twilio_client.send_whatsapp_message", return_value="SMVS"):
+                r = client.post(
+                    "/whatsbot/messages",
+                    headers=headers,
+                    json={
+                        "customer_wa_id": "573008887777",
+                        "body": "Mensaje realtime validate",
+                    },
+                )
+            if r.status_code != 201:
+                _fail("owner message for WS", r.text[:120])
+                failures += 1
+            else:
+                msg_data = r.json()
+                if msg_data.get("status") in {"sent", "delivered"}:
+                    _ok("mensaje dueño con status")
+                else:
+                    _fail("message status", str(msg_data.get("status")))
+                    failures += 1
+
+                got_new = False
+                for _ in range(6):
+                    data = json.loads(ws.receive_text())
+                    if data.get("type") == "message.new":
+                        got_new = True
+                        break
+                if got_new:
+                    _ok("WS message.new tras envío dueño")
+                else:
+                    _fail("WS message.new")
+                    failures += 1
+
+        convs = client.get("/whatsbot/conversations", headers=headers).json()
+        if convs:
+            conv_id = convs[0]["id"]
+            r = client.post(
+                f"/whatsbot/conversations/{conv_id}/mark-read",
+                headers=headers,
+            )
+            if r.status_code == 204:
+                _ok("POST mark-read")
+            else:
+                _fail("mark-read", str(r.status_code))
+                failures += 1
+
+            from datetime import datetime, timedelta, timezone
+
+            since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+            r = client.get(
+                "/whatsbot/conversations",
+                headers=headers,
+                params={"since": since},
+            )
+            if r.status_code == 200:
+                _ok("GET conversations?since=")
+            else:
+                _fail("conversations since", str(r.status_code))
+                failures += 1
+        else:
+            _fail("conversaciones para mark-read")
+            failures += 1
+    except Exception as exc:
+        _fail("realtime Fase 11", str(exc))
         failures += 1
 
     print(f"\n=== Resultado: {failures} fallo(s) ===")
