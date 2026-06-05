@@ -1,4 +1,4 @@
-## v1.20
+## v1.22
 
 
 
@@ -2789,7 +2789,342 @@ Nota breve añadida en `docs/INCREMENTAL_GUIDE.md` (sección OF-E). No se tocó 
 
 
 ##############################################
-## v1.19
+## v1.20
+
+## prompt ##
+
+
+---
+
+### Por qué este prompt
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@whatsbot_app/test/helpers/test_app_services.dart
+
+MEJORA: Los tests actuales de Flutter no cubren de forma real los comportamientos críticos de `chat_screen.dart` ni `chats_list_screen.dart`. Existen smoke tests mínimos en `test/screens/`, pero faltan casos para las mejoras v1.16–v1.18 (apertura fluida, mensajes en vivo, orden cronológico, reorden de lista al enviar/recibir). Agrega cobertura widget/integration en esas dos pantallas sin tocar lógica de producción salvo lo estrictamente necesario para testabilidad.
+
+## Contexto (estado actual)
+
+- Tests existentes:
+  - `whatsbot_app/test/screens/chat_screen_test.dart` — 3 casos básicos (mensajes SQLite, envío, admin confirmado)
+  - `whatsbot_app/test/screens/chats_list_screen_test.dart` — 2 casos (vacío, orden por `lastMessageAt`)
+- Tests de repositorios/sync: `chat_repository_test`, `message_repository_test`, `sync_engine_test`
+- Helper: `test/helpers/test_app_services.dart` (SQLite en memoria + `TestApiClient`)
+- **Hueco:** las pantallas tienen lógica de UI/realtime/orden que NO está validada en widget tests
+
+## Objetivo
+
+Ampliar `chat_screen_test.dart` y `chats_list_screen_test.dart` para que fallen si se rompen los comportamientos documentados en `INCREMENTAL_GUIDE.md` (secciones v1.16–v1.18).
+
+## Casos obligatorios — `chat_screen.dart`
+
+1. **Apertura con caché (v1.16):** con `initialMessages` o mensajes en SQLite, el último mensaje es visible en el primer frame (ListView `reverse: true`); sin spinner si hay datos locales.
+2. **Orden cronológico (v1.18):** mensajes entrantes/salientes con mismos `createdAt` pero distinto `id` se muestran en orden estable (`compareChronological`).
+3. **Mensaje entrante en vivo (v1.17):** simular evento `message.new` (vía `syncEngine.handleRealtimeEvent` o inyectar en `realtimeService`) → la burbuja aparece sin salir/reentrar al chat.
+4. **Envío optimista:** escribir y tap enviar → burbuja visible de inmediato; no duplicar al confirmar en SQLite.
+5. **Capitalización:** `TextField` usa `TextCapitalization.sentences` (verificar propiedad del widget).
+6. **Sin regresión de scroll:** con historial precargado, no debe haber `CircularProgressIndicator` superpuesto sobre mensajes existentes.
+
+## Casos obligatorios — `chats_list_screen.dart`
+
+1. **Reorden al enviar:** tras ack saliente (`SyncEngine` o upsert con preview nuevo), la conversación sube al tope.
+2. **Reorden al recibir (v1.18):** evento `message.new` entrante (aunque el mensaje esté deduplicado en SQLite) → conversación sube al tope con preview actualizado.
+3. **Navegación con precarga (v1.16):** tap en un chat → `ChatScreen` recibe `initialMessages` desde caché local (no pantalla vacía en primer frame).
+4. **Estado vacío y error:** mantener test de vacío; añadir si es viable test de error de refresh (mock API falla → mensaje de error visible).
+5. **Orden estable:** tres conversaciones con distintos `lastMessageAt` → orden descendente verificado por posición en `ListTile`.
+
+## Infraestructura de tests (solo si hace falta)
+
+- Reutilizar `setUpTestAppServices()` / `tearDownTestAppServices()` / `disposeWidgetTree()`.
+- Si falta simular WS: helper en `test/helpers/` que emita `RealtimeEvent` tipados (`message.new`, `conversation.updated`) sin backend real.
+- **No** añadir `initForTesting` en `AppServices` salvo que sea imprescindible; preferir asignación directa como ya hace el helper.
+- Mocks mínimos en `TestApiClient` solo para rutas que las pantallas llamen en los escenarios anteriores.
+
+## Archivos a tocar (alcance)
+
+**Crear/ampliar:**
+- `whatsbot_app/test/screens/chat_screen_test.dart`
+- `whatsbot_app/test/screens/chats_list_screen_test.dart`
+- Opcional: `whatsbot_app/test/helpers/realtime_test_helper.dart` (o similar)
+
+**Evitar tocar:**
+- `chatbot/gateway.py`, intents, prompts del bot
+- Pantallas de producción salvo extracción mínima para testabilidad (solo si no hay otra forma de probar el comportamiento)
+
+## Criterios de cierre
+
+```bash
+cd whatsbot_app
+flutter analyze
+flutter test
+
+
+## resp cursor ##
+
+Tests añadidos
+chat_screen_test.dart (8 casos, +5 nuevos)
+Caso	Comportamiento
+Apertura con initialMessages + SQLite
+Último mensaje visible en el primer frame, ListView.reverse: true, sin spinner
+Caché SQLite sin initialMessages
+Mensajes visibles sin CircularProgressIndicator superpuesto
+Orden cronológico (v1.18)
+Mismo createdAt, distinto id → orden estable [30, 20, 10] en burbujas
+Mensaje entrante en vivo (v1.17)
+emitRealtimeEvent(message.new) → burbuja sin reabrir
+Envío optimista
+Burbuja inmediata; una sola copia tras confirmación API
+TextCapitalization.sentences
+Verificado en el TextField
+chats_list_screen_test.dart (6 casos, +4 nuevos)
+Caso	Comportamiento
+Orden estable (3 chats)
+Posición en ListTile por lastMessageAt descendente
+Reorden al enviar
+Tras sendMessage, el chat sube al tope con preview actualizado
+Reorden al recibir (v1.18)
+message.new deduplicado aún sube el chat
+Navegación con precarga (v1.16)
+Tap → ChatScreen muestra caché en el primer frame
+Error de refresh
+failConversations → mensaje de error + botón Reintentar
+Infraestructura de tests
+test/helpers/realtime_test_helper.dart — emite eventos WS vía debugEmitEvent
+test/helpers/test_app_services.dart — mock HTTP en apiClient singleton, WS deshabilitado en tests, cierre de DB en disposeWidgetTree
+test/helpers/test_api_client.dart — failConversations, stub mark-read
+Cambios mínimos en producción (testabilidad)
+ApiClient.replaceHttpClient() — inyectar mock HTTP
+RealtimeService.disableSocketForTesting — evitar WebSocket real en widget tests
+RealtimeService.emitAfterPersist() / debugEmitEvent() — simular frames WS
+Validación
+cd whatsbot_app
+flutter analyze   # No issues found!
+flutter test      # 29 passed (14 en test/screens/)
+Esas notificaciones corresponden a ejecuciones intermedias que fallaron o quedaron colgadas mientras se depuraba la suite en Windows (bloqueo de sqlite3.dll, tests de ChatScreen que no terminaban por streams de Drift/WebSocket real).
+
+Eso ya quedó resuelto. El estado final del trabajo es:
+
+flutter analyze → sin issues
+flutter test → 29 passed (14 en test/screens/), cubriendo v1.16–v1.18
+Si en tu máquina vuelve el error de sqlite3.dll, renombra o borra whatsbot_app/build/native_assets/windows/ y vuelve a lanzar los tests.
+
+
+
+
+####################################
+## v1.21
+
+## prompt ##
+
+Ahora no edites codigo ni modifiques el proyecto, solo responde: haz un prompt incluyendo los test, prompt_evolucion_saas y diciendo que verifique que el chat funciona correctamente con las funciones requeridas puestas anteriormente
+
+
+## prompt ##
+
+PROMPT — Verificación chat WhatsBot (v1.16–v1.18) + tests
+Contexto: Lee @PROMPT_EVOLUCION_SAAS_WHATSBOT.md ,@docs/FLUTTER_APP.md y @docs/INCREMENTAL_GUIDE.md (secciones de chat v1.16–v1.18). Son mejoras incrementales sobre el chat Flutter ya existente: no reescribir la pantalla ni cambiar el modelo de datos salvo bug real. El objetivo es que la experiencia se sienta fluida, como WhatsApp — apertura instantánea, mensajes en vivo, lista que se reordena sola — sin tirones, saltos de scroll, spinners innecesarios ni parpadeos al abrir, enviar o recibir.
+
+Hay cobertura widget en whatsbot_app/test/screens/.
+
+Objetivo: Confirmar que el chat funciona correctamente en app y se percibe continuo y estable, y que los tests protegen los comportamientos críticos. Si algo falla (test o UX con tirón), corregir con el diff mínimo. No tocar chatbot/gateway.py, intents ni prompts del bot salvo que el fallo sea del backend API de mensajes.
+
+Principio rector: cada cambio debe ser incremental; si una corrección introduce scroll visible, loading superpuesto o reorder brusco de la lista, no cumple aunque los datos sean correctos.
+
+Comportamientos que deben cumplirse (v1.16–v1.18)
+chat_screen.dart
+v1.16 — Apertura fluida con caché: con initialMessages o mensajes en SQLite, el último mensaje visible en el primer frame (ListView reverse: true); sin CircularProgressIndicator si hay datos locales; sin jumpTo/animateTo en apertura.
+v1.18 — Orden cronológico: mensajes con mismo createdAt y distinto id en orden estable (ChatMessage.compareChronological); sin reorden visual brusco al mergear WS/SQLite.
+v1.17 — Mensaje entrante en vivo: evento message.new (WS / syncEngine.handleRealtimeEvent) → burbuja visible sin salir y reentrar al chat; sin parpadeo de toda la lista.
+Envío optimista: escribir y enviar → burbuja al instante; sin duplicar al confirmar en SQLite; scroll solo si el usuario está al fondo.
+Capitalización: TextField con textCapitalization: TextCapitalization.sentences.
+Sin regresión de scroll: con historial precargado, no spinner superpuesto sobre mensajes existentes ni salto al terminar sync en background.
+chats_list_screen.dart
+Reorden al enviar: tras ack saliente, la conversación sube al tope con preview actualizado, sin parpadeo de toda la lista.
+v1.18 — Reorden al recibir: message.new entrante (aunque deduplicado en SQLite) → conversación al tope con preview actualizado.
+v1.16 — Navegación con precarga: tap en chat → ChatScreen recibe initialMessages desde caché local (no pantalla vacía en el primer frame).
+Estado vacío y error: lista vacía con mensaje claro; refresh fallido → error visible + Reintentar.
+Orden estable: tres conversaciones con distintos lastMessageAt → orden descendente por posición en ListTile.
+Tests existentes (deben pasar)
+Infraestructura: test/helpers/test_app_services.dart, test/helpers/test_api_client.dart, test/helpers/realtime_test_helper.dart
+
+test/screens/chat_screen_test.dart (8 casos)
+
+Mensajes desde SQLite
+Último mensaje en primer frame con initialMessages (v1.16)
+Sin spinner con caché SQLite (v1.16)
+Orden cronológico estable mismo createdAt (v1.18)
+Mensaje entrante en vivo vía emitRealtimeEvent (v1.17)
+Burbuja optimista sin duplicar
+TextCapitalization.sentences
+Mensaje admin tras confirmación en SQLite
+test/screens/chats_list_screen_test.dart (6 casos)
+
+Estado vacío
+Orden de tres conversaciones por lastMessageAt
+Reorden al tope tras enviar
+Reorden al recibir message.new deduplicado (v1.18)
+Apertura con initialMessages desde caché (v1.16)
+Error de refresh con API mock fallida
+Otros: test/sync/sync_engine_test.dart, test/repositories/*, test/models/message_test.dart
+
+Validación obligatoria
+cd whatsbot_app
+flutter analyze
+flutter test
+Si en Windows falla por sqlite3.dll bloqueado: renombrar o borrar build/native_assets/windows/ y reintentar.
+
+Checklist manual (app real — fluidez perceptible):
+
+
+ Abrir chat con historial → último mensaje visible al instante, sin salto de scroll, sin spinner, sin flash de lista vacía
+
+ Recibir mensaje del cliente (WS o webhook) → burbuja en chat abierto y chat sube en lista sin tirón
+
+ Enviar como dueño → burbuja optimista, lista reordenada, sin duplicados ni parpadeo
+
+ Mensajes del dueño, bot y cliente intercalados en orden cronológico correcto
+
+ Escribir en el campo de mensaje → capitalización de oraciones activa
+
+ Reabrir un chat ya visitado → sin loading ni re-sync innecesario (solo delta real)
+Criterio de cierre: flutter analyze sin issues, flutter test en verde (29 tests), checklist manual OK con sensación de continuidad (sin tirones). Si un test falla, arreglar la regresión antes de cerrar. Documentar solo si cambias comportamiento en docs/INCREMENTAL_GUIDE.md.
+
+Evitar tocar: chatbot/gateway.py, intents, prompts del bot; cambios en pantallas solo si es imprescindible para testabilidad o bug real de fluidez/funcionalidad.
+
+
+
+## resp cursor ##
+
+
+Verificación completada — criterio de cierre cumplido
+Ejecuté la validación obligatoria y revisé la implementación contra el checklist v1.16–v1.18.
+
+Validación automática
+Comando	Resultado
+flutter analyze
+Sin issues
+flutter test
+29/29 en verde
+No fue necesario limpiar build/native_assets/windows/ ni aplicar correcciones.
+
+Comportamientos v1.16–v1.18 (código + tests)
+chat_screen.dart
+
+Requisito	Estado	Evidencia
+v1.16 Apertura fluida con caché
+✅
+initialMessages en initState; ListView(reverse: true); spinner solo si messages.isEmpty && _refreshing
+v1.16 Sin scroll en apertura
+✅
+Sin jumpTo/animateTo al abrir; scroll solo en _onMessagesUpdated si hay crecimiento y _isNearBottom()
+v1.17 Mensaje entrante en vivo
+✅
+_mergeIncomingMessage + setState en message.new antes de SQLite
+v1.17 Capitalización
+✅
+textCapitalization: TextCapitalization.sentences
+v1.18 Orden cronológico estable
+✅
+ChatMessage.compareChronological en merge y en watchMessages
+Envío optimista sin duplicar
+✅
+sendMessage + dedup por clientUuid en repositorio
+Sync en background sin spinner
+✅
+_refresh(silent: true) con showLoading = !silent || !hasCache
+chats_list_screen.dart
+
+Requisito	Estado	Evidencia
+v1.16 Precarga al navegar
+✅
+getCachedMessages antes del push con initialMessages
+Reorden al enviar
+✅
+sendMessage actualiza conversación → watchConversations reordena
+v1.18 Reorden al recibir
+✅
+SyncEngine._bumpConversationForMessage actualiza aunque el mensaje esté deduplicado
+Estado vacío / error + Reintentar
+✅
+UI con mensaje claro y botón Reintentar
+Capa de datos (sync_engine.dart, repositorios)
+
+message.new persiste y sube preview/timestamp aunque el mensaje ya exista en SQLite (test dedicado en sync_engine_test.dart).
+mergeWithLocal no retrocede lastMessageAt (test en chat_repository_test.dart).
+Tests críticos (todos pasan)
+chat_screen_test.dart (8): SQLite, initialMessages primer frame, sin spinner con caché, orden estable mismo createdAt, mensaje en vivo vía WS, optimista sin duplicar, capitalización, admin confirmado.
+
+chats_list_screen_test.dart (6): vacío, orden por lastMessageAt, reorden al enviar, reorden al recibir deduplicado, apertura con caché, error de refresh.
+
+Resto (15): modelos, repositorios, sync engine, widget login.
+
+Checklist manual (app real)
+Para cerrar la parte perceptual en dispositivo/emulador:
+
+Abrir chat con historial → último mensaje visible al instante, sin salto ni spinner.
+Recibir mensaje del cliente → burbuja en chat abierto + conversación sube en lista sin tirón.
+Enviar como dueño → burbuja optimista, lista reordenada, sin duplicados.
+Mensajes dueño/bot/cliente en orden cronológico correcto.
+Campo de mensaje con capitalización de oraciones.
+Reabrir chat visitado → sin loading innecesario (TTL 2 min + delta real).
+Conclusión
+No se requirieron cambios de código: la implementación cumple v1.16–v1.18, los 29 tests protegen los comportamientos críticos y flutter analyze está limpio. No toqué chatbot/gateway.py, intents ni prompts.
+
+Si en prueba manual detectas algún tirón concreto (por ejemplo al recibir WS con chat abierto), indícame el escenario exacto y lo atacamos con el diff mínimo.
+
+
+
+
+
+###################################
+## v1.22
+
+
+## PROMPT ##
+
+haz solo esto y luego me muestras los cambios que hiciste:
+
+[[[Has que por ejemplo yo le voy agregando incidencias, que el las vaya añadiendo como test y cada vez que haga el test va haciendo esas pruebas, se van a ir agregando incrementalmente de manera que siempre cada cosa que arreglo se mantiene, pon esa directriz en docs/INCREMENTAL_GUIDE.md, ]]]
+
+IMPORTANTE: SOLO MEJORA docs/INCREMENTAL_GUIDE.md,  CON LO QUE TE DIJE, SOLO TOCA ESE ARCHIVO Y AL FINAL ME DICES QUE HICISTE
+
+
+
+## resp cursor ##
+
+Actualicé solo `docs/INCREMENTAL_GUIDE.md`. Cambio principal en la sección **Directriz — tests incrementales por incidencia**:
+
+### Qué cambié
+
+1. **Nuevo párrafo de alcance** al inicio:
+   - Solo cuenta lo que **tú pidas o reportes** explícitamente.
+   - **No** se añaden tests ni notas por hallazgos del agente, refactors internos ni mejoras no solicitadas.
+
+2. **Ajustes de redacción** en el resto de la sección para que quede claro que aplica solo a incidencias **que pediste tú**:
+   - “comportamiento que pediste” en lugar de “comportamiento crítico”
+   - “incidencia que pediste” en las reglas 4 y 5
+   - “Al cerrar una incidencia **que pediste**” en el criterio de cierre
+
+El bloque quedó así:
+
+```5:34:docs/INCREMENTAL_GUIDE.md
+## Directriz — tests incrementales por incidencia
+
+**Alcance:** solo cuenta lo que **tú pidas o reportes** explícitamente (bug, comportamiento nuevo, incidencia concreta). No se añaden tests ni notas aquí por hallazgos del agente, refactors internos ni mejoras no solicitadas.
+
+Cada incidencia que **tú indiques** debe quedar **protegida por un test** antes de darla por cerrada. ...
+```
+
+No toqué ningún otro archivo.
+
+
+
+
+### segundo prompt ##
+
+
+
 
 
 

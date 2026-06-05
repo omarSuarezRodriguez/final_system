@@ -2,6 +2,39 @@
 
 > Una nota breve al cerrar cada fase. El bot en **raíz** no debe regresar hasta validar.
 
+## Directriz — tests incrementales por incidencia
+
+**Alcance:** solo cuenta lo que **tú pidas o reportes** explícitamente (bug, comportamiento nuevo, incidencia concreta). No se añaden tests ni notas aquí por hallazgos del agente, refactors internos ni mejoras no solicitadas.
+
+Cada incidencia que **tú indiques** debe quedar **protegida por un test** antes de darla por cerrada. Los tests se van **añadiendo de forma incremental**; en cada corrida, `flutter test` y `pytest` ejecutan **toda** la suite acumulada, de modo que lo que ya pediste y arreglaste no regrese.
+
+| Ámbito | Dónde añadir el test | Validar |
+|--------|----------------------|---------|
+| App Flutter | `whatsbot_app/test/` (p. ej. `test/screens/`, `test/repositories/`, `test/sync/`) | `cd whatsbot_app && flutter test` |
+| Backend Python | `tests/test_*.py` | `python -m pytest tests/ -v` |
+
+**Reglas al agregar una incidencia (solo si la pediste tú):**
+
+1. **Escribir el test** que falle sin el fix y pase con él (reproduce el comportamiento que pediste).
+2. **No borrar tests** al refactorizar salvo que el comportamiento deje de existir; si cambia la spec, actualizar el test.
+3. **Nombrar el test** describiendo el comportamiento, no el bug: p. ej. `ChatScreen reordena al recibir message.new deduplicado (v1.18)`.
+4. **Anotar aquí** (en la sección de la fase o versión correspondiente) qué test cubre la incidencia que pediste y el comando de validación.
+5. **Un test por incidencia** que hayas reportado; agrupar en el archivo del módulo/pantalla, sin duplicar casos.
+
+**Ubicación habitual (Flutter):**
+
+| Archivo | Qué protege |
+|---------|-------------|
+| `test/screens/chat_screen_test.dart` | Apertura, scroll, mensajes en vivo, envío optimista, capitalización |
+| `test/screens/chats_list_screen_test.dart` | Orden, reorden al enviar/recibir, caché, errores de refresh |
+| `test/repositories/*` | SQLite, cola offline, deduplicación |
+| `test/sync/sync_engine_test.dart` | Eventos WS → persistencia y preview de conversación |
+| `test/models/message_test.dart` | Orden cronológico estable (`compareChronological`) |
+
+Al cerrar una incidencia **que pediste**: fix mínimo + test nuevo + nota breve en esta guía. Criterio: la suite completa en verde (`flutter analyze` sin issues).
+
+---
+
 ## Fase 0 — Análisis ✅
 
 - Inventario completo del bot en raíz.
