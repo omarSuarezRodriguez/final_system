@@ -87,10 +87,12 @@ La app guarda el JWT en `shared_preferences` y lo envía como `Authorization: Be
 | Pedido pendiente | Banner amarillo con Aprobar / Rechazar |
 | Ajustes | Acceso a Menú, Intents, Mensajes |
 
-## Tiempo real (MVP)
+## Tiempo real (Fase 11.3+)
 
-- Chat activo: **polling cada 4 s** (`ApiConfig.chatPollInterval`).
-- Lista de chats: refresh cada 8 s + pull-to-refresh.
+- **WebSocket** `wss://{API}/whatsbot/ws?token=<JWT>` — mensajes al instante.
+- Servicio: `lib/services/realtime_service.dart` (reconexión + sync `since`/`after_id`).
+- **Fallback:** REST cada 30 s solo si el WS no está conectado (`ApiConfig.fallbackPollInterval`).
+- Pull-to-refresh sigue disponible en la lista de chats.
 
 ## Validación Fase 9
 

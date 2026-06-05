@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
 
@@ -6,8 +6,10 @@ import '../config/api_config.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/order.dart';
+import '../models/realtime_event.dart';
 import '../services/api_client.dart';
 import '../services/message_alerts_service.dart';
+import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import '../widgets/message_bubble.dart';
 import 'order_actions_bar.dart';
@@ -29,32 +31,85 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _loading = true;
   bool _sending = false;
   bool _orderBusy = false;
-  Timer? _pollTimer;
+  Timer? _fallbackTimer;
+  StreamSubscription<RealtimeEvent>? _realtimeSub;
+  StreamSubscription<bool>? _connectionSub;
 
   @override
   void initState() {
     super.initState();
     messageAlerts.setActiveConversation(widget.conversation.id);
-    _refresh();
-    _pollTimer = Timer.periodic(ApiConfig.chatPollInterval, (_) {
-      _refresh(silent: true);
+    _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
+    _connectionSub = realtimeService.connectionState.listen((_) {
+      _configureFallbackTimer();
     });
+    _refresh();
+    _configureFallbackTimer();
   }
 
   @override
   void dispose() {
     messageAlerts.setActiveConversation(null);
-    _pollTimer?.cancel();
+    _realtimeSub?.cancel();
+    _connectionSub?.cancel();
+    _fallbackTimer?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
+  void _configureFallbackTimer() {
+    _fallbackTimer?.cancel();
+    if (realtimeService.isConnected) return;
+    _fallbackTimer = Timer.periodic(ApiConfig.fallbackPollInterval, (_) {
+      if (!realtimeService.isConnected) {
+        _refresh(silent: true);
+      }
+    });
+  }
+
+  void _onRealtimeEvent(RealtimeEvent event) {
+    if (!mounted) return;
+
+    if (event.type == 'message.new') {
+      final message = event.message;
+      if (message == null ||
+          message.conversationId != widget.conversation.id) {
+        return;
+      }
+      _appendMessage(message);
+      unawaited(
+        messageAlerts.handleChatMessages(
+          conversationId: widget.conversation.id,
+          displayName: widget.conversation.displayName,
+          messages: _messages,
+        ),
+      );
+    }
+  }
+
+  void _appendMessage(ChatMessage message) {
+    if (_messages.any((item) => item.id == message.id)) return;
+    setState(() {
+      _messages = [..._messages, message];
+      _loading = false;
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _refresh({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
-      final messages =
-          await apiClient.getMessages(widget.conversation.id);
+      final afterId = _messages.isEmpty
+          ? null
+          : _messages.map((m) => m.id).reduce((a, b) => a > b ? a : b);
+      final incremental = afterId != null && silent && _messages.isNotEmpty;
+      final messages = incremental
+          ? await apiClient.getMessages(
+              widget.conversation.id,
+              afterId: afterId,
+            )
+          : await apiClient.getMessages(widget.conversation.id);
       final orders = await apiClient.getPendingOrders();
       final wa = widget.conversation.customerWaId;
       PendingOrder? match;
@@ -66,14 +121,22 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       if (!mounted) return;
       setState(() {
-        _messages = messages;
+        if (incremental && messages.isNotEmpty) {
+          final known = _messages.map((m) => m.id).toSet();
+          _messages = [
+            ..._messages,
+            ...messages.where((m) => !known.contains(m.id)),
+          ];
+        } else {
+          _messages = messages;
+        }
         _pendingOrder = match;
         _loading = false;
       });
       await messageAlerts.handleChatMessages(
         conversationId: widget.conversation.id,
         displayName: widget.conversation.displayName,
-        messages: messages,
+        messages: _messages,
       );
       _scrollToBottom();
     } catch (_) {
@@ -110,10 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
         body: text,
       );
       if (!mounted) return;
-      setState(() {
-        _messages = [..._messages, msg];
-      });
-      _scrollToBottom();
+      _appendMessage(msg);
     } on ApiException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

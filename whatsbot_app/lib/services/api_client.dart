@@ -35,6 +35,8 @@ class ApiClient {
 
   bool get isLoggedIn => _token != null && _token!.isNotEmpty;
 
+  String? get accessToken => _token;
+
   Map<String, String> get _authHeaders => {
         'Content-Type': 'application/json',
         if (_token != null) 'Authorization': 'Bearer $_token',
@@ -62,10 +64,10 @@ class ApiClient {
   }
 
   Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
     _token = null;
     businessId = null;
     businessName = null;
-    final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
     await prefs.remove(_businessIdKey);
     await prefs.remove(_businessNameKey);
@@ -87,9 +89,12 @@ class ApiClient {
     throw _errorFromResponse(response, 'No se pudo iniciar sesión');
   }
 
-  Future<List<Conversation>> getConversations() async {
+  Future<List<Conversation>> getConversations({DateTime? since}) async {
+    final query = since != null
+        ? {'since': since.toUtc().toIso8601String()}
+        : null;
     final response = await _http.get(
-      _uri('/whatsbot/conversations'),
+      _uri('/whatsbot/conversations', query),
       headers: _authHeaders,
     );
     _ensureOk(response);
@@ -99,9 +104,14 @@ class ApiClient {
         .toList();
   }
 
-  Future<List<ChatMessage>> getMessages(int conversationId) async {
+  Future<List<ChatMessage>> getMessages(
+    int conversationId, {
+    int? afterId,
+  }) async {
+    final query =
+        afterId != null ? {'after_id': afterId.toString()} : null;
     final response = await _http.get(
-      _uri('/whatsbot/conversations/$conversationId/messages'),
+      _uri('/whatsbot/conversations/$conversationId/messages', query),
       headers: _authHeaders,
     );
     _ensureOk(response);

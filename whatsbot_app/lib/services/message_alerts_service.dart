@@ -108,6 +108,33 @@ class MessageAlertsService {
     _lastSeenAtByConversation[conversationId] = at ?? DateTime.now();
   }
 
+  Future<void> handleRealtimeMessage({
+    required Conversation conversation,
+    required ChatMessage message,
+  }) async {
+    if (!_ready || message.isOutgoing) return;
+
+    final conversationId = conversation.id;
+    final prevMax = _maxMessageIdByConversation[conversationId] ?? 0;
+    if (message.id <= prevMax) return;
+
+    _maxMessageIdByConversation[conversationId] = message.id;
+    if (conversation.lastMessageAt != null) {
+      _lastMessageAtByConversation[conversationId] = conversation.lastMessageAt;
+    }
+
+    await _notifyIncoming(
+      conversationId: conversationId,
+      displayName: conversation.displayName,
+      preview: message.body,
+      messageId: message.id,
+    );
+
+    if (_activeConversationId == conversationId && _appInForeground) {
+      markConversationSeen(conversationId, at: conversation.lastMessageAt);
+    }
+  }
+
   Future<void> handleChatMessages({
     required int conversationId,
     required String displayName,

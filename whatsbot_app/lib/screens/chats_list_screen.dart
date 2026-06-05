@@ -1,13 +1,15 @@
-import 'dart:async';
+import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../config/api_config.dart';
 import '../models/conversation.dart';
+import '../models/realtime_event.dart';
 import '../main.dart';
 import '../services/api_client.dart';
 import '../services/message_alerts_service.dart';
+import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
@@ -23,23 +25,92 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
   List<Conversation> _conversations = [];
   bool _loading = true;
   String? _error;
-  Timer? _refreshTimer;
+  Timer? _fallbackTimer;
+  StreamSubscription<RealtimeEvent>? _realtimeSub;
+  StreamSubscription<bool>? _connectionSub;
 
   @override
   void initState() {
     super.initState();
     messageAlerts.onOpenConversation = _openConversationById;
-    _load();
-    _refreshTimer = Timer.periodic(ApiConfig.chatsRefreshInterval, (_) {
-      _load(silent: true);
+    unawaited(realtimeService.connect());
+    _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
+    _connectionSub = realtimeService.connectionState.listen((_) {
+      _configureFallbackTimer();
     });
+    _load();
+    _configureFallbackTimer();
   }
 
   @override
   void dispose() {
     messageAlerts.onOpenConversation = null;
-    _refreshTimer?.cancel();
+    _realtimeSub?.cancel();
+    _connectionSub?.cancel();
+    _fallbackTimer?.cancel();
     super.dispose();
+  }
+
+  void _configureFallbackTimer() {
+    _fallbackTimer?.cancel();
+    if (realtimeService.isConnected) return;
+    _fallbackTimer = Timer.periodic(ApiConfig.fallbackPollInterval, (_) {
+      if (!realtimeService.isConnected) {
+        _load(silent: true);
+      }
+    });
+  }
+
+  void _onRealtimeEvent(RealtimeEvent event) {
+    if (!mounted) return;
+
+    switch (event.type) {
+      case 'message.new':
+        final message = event.message;
+        final conversation = event.conversation;
+        if (message != null && conversation != null) {
+          _upsertConversation(conversation);
+          unawaited(
+            messageAlerts.handleRealtimeMessage(
+              conversation: conversation,
+              message: message,
+            ),
+          );
+        } else if (conversation != null) {
+          _upsertConversation(conversation);
+        }
+        break;
+      case 'conversation.updated':
+      case 'conversation.sync':
+        final conversation = event.conversation;
+        if (conversation != null) {
+          _upsertConversation(conversation);
+        }
+        break;
+    }
+  }
+
+  void _upsertConversation(Conversation conversation) {
+    final index =
+        _conversations.indexWhere((item) => item.id == conversation.id);
+    setState(() {
+      if (index >= 0) {
+        _conversations[index] = conversation;
+      } else {
+        _conversations.add(conversation);
+      }
+      _sortConversations();
+      _loading = false;
+      _error = null;
+    });
+  }
+
+  void _sortConversations() {
+    _conversations.sort((a, b) {
+      final aTime = a.lastMessageAt ?? a.updatedAt;
+      final bTime = b.lastMessageAt ?? b.updatedAt;
+      return bTime.compareTo(aTime);
+    });
   }
 
   Future<void> _openConversationById(int conversationId) async {
@@ -83,6 +154,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
         _conversations = list;
         _loading = false;
       });
+      _sortConversations();
       await messageAlerts.handleConversations(list);
       if (mounted) setState(() {});
     } on ApiException catch (e) {
@@ -118,6 +190,15 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       appBar: AppBar(
         title: Text(apiClient.businessName ?? 'WhatsBot'),
         actions: [
+          if (!realtimeService.isConnected)
+            const Padding(
+              padding: EdgeInsets.only(right: 4),
+              child: Icon(
+                Icons.cloud_off,
+                size: 20,
+                color: Colors.white70,
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Ajustes',

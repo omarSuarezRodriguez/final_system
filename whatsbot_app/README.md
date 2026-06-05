@@ -45,7 +45,7 @@ flutter run
 |----------|-------------|
 | Login | business_id + PIN → JWT |
 | Lista de chats | Header verde, conversaciones del bot |
-| Chat | Burbujas WA, input abajo, polling cada 4 s |
+| Chat | Burbujas WA, input abajo, tiempo real vía WebSocket |
 | Pedido | Barra Aprobar / Rechazar si hay pedido pendiente |
 | Ajustes | Menú, Intents, Mensajes, cerrar sesión |
 

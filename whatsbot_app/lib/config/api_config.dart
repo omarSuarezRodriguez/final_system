@@ -9,6 +9,18 @@ class ApiConfig {
   static const String apiBaseUrl =
       'https://snowman-shower-pellet.ngrok-free.dev';
 
-  static const Duration chatPollInterval = Duration(seconds: 4);
-  static const Duration chatsRefreshInterval = Duration(seconds: 8);
+  /// Fallback REST si el WebSocket no está conectado (reconexión).
+  static const Duration fallbackPollInterval = Duration(seconds: 30);
+
+  /// URL WebSocket derivada de [apiBaseUrl].
+  static String get wsBaseUrl {
+    final base = apiBaseUrl;
+    if (base.startsWith('https://')) {
+      return 'wss://${base.substring(8)}';
+    }
+    if (base.startsWith('http://')) {
+      return 'ws://${base.substring(7)}';
+    }
+    return base;
+  }
 }

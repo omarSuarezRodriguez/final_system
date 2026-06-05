@@ -252,3 +252,27 @@ python scripts/validate_chatbot.py
 **Pendiente (11.3+):** Flutter `RealtimeService`, FCM, estados mensaje, quitar polling.
 
 **Probar WS manual:** login → token → conectar `wss://{API}/whatsbot/ws?token=...` → enviar mensaje al bot → recibir `message.new`.
+
+---
+
+## Fase 11.3 — Flutter WebSocket + quitar polling ✅
+
+**Hecho:**
+
+- [x] `lib/services/realtime_service.dart` — WS autenticado, backoff 1→30 s, ping/pong, sync al reconectar
+- [x] `lib/models/realtime_event.dart`
+- [x] `api_client.dart` — `getConversations(since:)`, `getMessages(afterId:)`, `accessToken`
+- [x] `chats_list_screen.dart` / `chat_screen.dart` — eventos live; fallback REST 30 s si WS cae
+- [x] Login, splash y logout conectan/desconectan WS
+- [x] `message_alerts_service.dart` — alertas desde evento `message.new`
+- [x] Dependencia `web_socket_channel`
+
+```bash
+cd final_system/whatsbot_app
+flutter pub get
+flutter analyze
+```
+
+**Pendiente (11.4+):** FCM push, ticks de estado, pedidos live sin polling REST.
+
+**Probar:** login → lista de chats → cliente escribe al bot → mensaje aparece al instante (sin esperar 4 s); icono nube si WS desconectado.
