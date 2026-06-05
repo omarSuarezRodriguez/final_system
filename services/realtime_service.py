@@ -207,6 +207,15 @@ async def emit_message_saved(
     event = build_message_new_event(msg, conv)
     count = await realtime_hub.emit(business_id, event)
     await realtime_hub.emit(business_id, build_conversation_updated_event(conv))
+    from services.push_service import maybe_push_incoming_message
+
+    await maybe_push_incoming_message(
+        db,
+        business_id,
+        msg,
+        conv,
+        ws_delivered=count,
+    )
     return count
 
 

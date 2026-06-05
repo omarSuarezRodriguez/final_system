@@ -276,3 +276,28 @@ flutter analyze
 **Pendiente (11.4+):** FCM push, ticks de estado, pedidos live sin polling REST.
 
 **Probar:** login → lista de chats → cliente escribe al bot → mensaje aparece al instante (sin esperar 4 s); icono nube si WS desconectado.
+
+---
+
+## Fase 11.4 — Push FCM/APNs ✅
+
+**Hecho:**
+
+- [x] `models/device_token.py` + `services/device_token_service.py`
+- [x] `services/push_service.py` — Firebase Admin SDK; push si `ws_delivered == 0` y mensaje entrante
+- [x] `POST/DELETE /whatsbot/device-token`
+- [x] `FCM_ENABLED`, `FCM_SERVICE_ACCOUNT_JSON_PATH` en settings y `.env.example`
+- [x] Flutter `lib/services/push_service.dart` — registro token, tap → chat, fallback si sin Firebase
+- [x] `tests/test_push_api.py`
+- [x] Guía Firebase en `docs/FLUTTER_APP.md`
+
+```bash
+cd final_system
+pip install -r requirements.txt
+python -m pytest tests/test_push_api.py -v
+cd whatsbot_app && flutter pub get && flutter analyze
+```
+
+**Pendiente (11.5+):** ticks de estado, pedidos live, validación E2E ampliada.
+
+**Probar push:** `FCM_ENABLED=true` + JSON servicio → login en app con `google-services.json` → cerrar app → cliente escribe → notificación del sistema → tap abre chat.

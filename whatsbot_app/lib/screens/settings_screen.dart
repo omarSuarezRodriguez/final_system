@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/business.dart';
 import '../services/api_client.dart';
+import '../services/push_service.dart';
 import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import 'intents_editor_screen.dart';
@@ -42,6 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _logout() async {
     await realtimeService.disconnect();
+    await pushService.unregisterOnLogout();
     await apiClient.logout();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

@@ -41,6 +41,7 @@ from config.settings import (  # noqa: E402
     DEFAULT_BUSINESS_ID,
     HOST,
     PORT,
+    FCM_ENABLED,
     REALTIME_ENABLED,
     RESTAURANT_NAME,
 )
@@ -107,6 +108,7 @@ def create_app() -> FastAPI:
             "default_business_id": DEFAULT_BUSINESS_ID,
             "api_public_url": API_PUBLIC_URL,
             "realtime_enabled": REALTIME_ENABLED,
+            "fcm_enabled": FCM_ENABLED,
         }
 
     return app

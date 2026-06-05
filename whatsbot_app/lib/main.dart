@@ -4,6 +4,7 @@ import 'screens/chats_list_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
 import 'services/message_alerts_service.dart';
+import 'services/push_service.dart';
 import 'services/realtime_service.dart';
 import 'theme/whatsapp_theme.dart';
 import 'widgets/app_lifecycle_observer.dart';
@@ -13,6 +14,7 @@ final navigatorKey = GlobalKey<NavigatorState>();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await messageAlerts.init();
+  await pushService.init();
   runApp(const WhatsBotApp());
 }
 
@@ -51,6 +53,7 @@ class _SplashGateState extends State<SplashGate> {
   Future<void> _init() async {
     await apiClient.loadSession();
     if (apiClient.isLoggedIn) {
+      await pushService.registerAfterLogin();
       await realtimeService.connect();
     }
     if (!mounted) return;

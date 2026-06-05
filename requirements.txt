@@ -29,6 +29,9 @@ waitress>=3.0.0
 # Optional cache
 redis>=5.0.0
 
+# Push (Fase 11.4 — optional)
+firebase-admin>=6.5.0
+
 # Dev / validation
 httpx>=0.27.0
 pytest>=8.0.0

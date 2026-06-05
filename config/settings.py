@@ -82,6 +82,14 @@ REALTIME_ENABLED = os.getenv("REALTIME_ENABLED", "true").strip().lower() in {
     "on",
 }
 WS_HEARTBEAT_SECONDS = int(os.getenv("WS_HEARTBEAT_SECONDS", "30"))
+FCM_ENABLED = os.getenv("FCM_ENABLED", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+FCM_SERVICE_ACCOUNT_JSON_PATH = os.getenv("FCM_SERVICE_ACCOUNT_JSON_PATH", "").strip()
+FCM_SERVICE_ACCOUNT_JSON = os.getenv("FCM_SERVICE_ACCOUNT_JSON", "").strip()
 
 
 def is_twilio_whatsapp_sandbox() -> bool:

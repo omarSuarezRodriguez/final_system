@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
 import '../services/message_alerts_service.dart';
+import '../services/push_service.dart';
 import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import 'chats_list_screen.dart';
@@ -37,6 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _pinController.text,
       );
       messageAlerts.seedFromLogin();
+      await pushService.registerAfterLogin();
       await realtimeService.connect();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(

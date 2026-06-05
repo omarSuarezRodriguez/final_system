@@ -3,6 +3,7 @@
 from models.business import Business, BusinessIntentConfig, BusinessPromptConfig
 from models.conversation import Conversation
 from models.customer import Customer
+from models.device_token import DeviceToken
 from models.menu import MenuItem
 from models.message import Message
 from models.order import Order
@@ -13,6 +14,7 @@ __all__ = [
     "BusinessPromptConfig",
     "Conversation",
     "Customer",
+    "DeviceToken",
     "MenuItem",
     "Message",
     "Order",

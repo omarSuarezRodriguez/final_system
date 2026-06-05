@@ -108,6 +108,20 @@ class MessageAlertsService {
     _lastSeenAtByConversation[conversationId] = at ?? DateTime.now();
   }
 
+  Future<void> notifyFromPush({
+    required int conversationId,
+    required String displayName,
+    required String preview,
+    required int messageId,
+  }) async {
+    await _notifyIncoming(
+      conversationId: conversationId,
+      displayName: displayName,
+      preview: preview,
+      messageId: messageId,
+    );
+  }
+
   Future<void> handleRealtimeMessage({
     required Conversation conversation,
     required ChatMessage message,

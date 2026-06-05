@@ -15,6 +15,8 @@ Rutas:
   GET/PUT /whatsbot/business/menu
   GET/PUT /whatsbot/business/intents
   GET/PUT /whatsbot/business/prompts
+  POST /whatsbot/device-token          — registrar FCM/APNs (Fase 11.4)
+  DELETE /whatsbot/device-token          — quitar token al logout
 """
 
 from __future__ import annotations
@@ -22,13 +24,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from api.middleware.auth import get_current_business_id
 from api.schemas import (
     BusinessMeOut,
     ConversationOut,
+    DeviceTokenRegister,
     IntentsConfigOut,
     IntentsConfigUpdate,
     MenuAppOut,
@@ -48,6 +51,7 @@ from services import conversation_service as conv_svc
 from services import menu_service as menu_svc
 from services import notification_service as notify_svc
 from services import order_service as order_svc
+from services import device_token_service as token_svc
 from services import sheets_sync_service as sheets_svc
 from services.realtime_service import emit_message_saved
 
@@ -141,6 +145,41 @@ async def send_owner_message(
     msg = saved[-1]
     await emit_message_saved(db, business_id, msg)
     return msg
+
+
+@router.post("/device-token", status_code=204)
+def register_device_token(
+    body: DeviceTokenRegister,
+    business_id: BusinessId,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Registra o actualiza token FCM/APNs del dispositivo."""
+    _require_business(db, business_id)
+    token_svc.upsert_device_token(
+        db,
+        business_id=business_id,
+        token=body.token,
+        platform=body.platform,
+    )
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.delete("/device-token", status_code=204)
+def unregister_device_token(
+    body: DeviceTokenRegister,
+    business_id: BusinessId,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Elimina token al cerrar sesión en el dispositivo."""
+    _require_business(db, business_id)
+    token_svc.delete_device_token(
+        db,
+        business_id=business_id,
+        token=body.token,
+    )
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/orders/pending", response_model=list[OrderOut])

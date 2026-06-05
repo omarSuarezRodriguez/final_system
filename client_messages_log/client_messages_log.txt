@@ -503,3 +503,53 @@ Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
 Escribe *inicio* para volver al inicio
 
 #################################################################
+################################################################
+
+Cliente: Mensaje cliente WS test
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: Mensaje cliente WS test
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: MENSAJE_CUSTOM_FASE7 vacio
+
+#################################################################
+################################################################
+
+Cliente: menu
+
+
+-------------------------------
+
+Chatbot: *Nuestro menú*
+
+*Platos*
+• Sopa Gateway BD — $5.00
+
+
+
+Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+---
+Escribe *inicio* para volver al inicio
+
+#################################################################

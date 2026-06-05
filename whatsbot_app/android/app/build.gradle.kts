@@ -47,3 +47,8 @@ flutter {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
+
+// Firebase: solo si existe google-services.json (ver docs/FLUTTER_APP.md)
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}

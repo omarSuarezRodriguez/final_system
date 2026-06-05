@@ -158,6 +158,30 @@ class ApiClient {
     return data['message'] as String? ?? 'Pedido aprobado';
   }
 
+  Future<void> registerDeviceToken({
+    required String token,
+    required String platform,
+  }) async {
+    final response = await _http.post(
+      _uri('/whatsbot/device-token'),
+      headers: _authHeaders,
+      body: jsonEncode({'token': token, 'platform': platform}),
+    );
+    _ensureOk(response, expected: {204, 200});
+  }
+
+  Future<void> unregisterDeviceToken({
+    required String token,
+    required String platform,
+  }) async {
+    final request = http.Request('DELETE', _uri('/whatsbot/device-token'));
+    request.headers.addAll(_authHeaders);
+    request.body = jsonEncode({'token': token, 'platform': platform});
+    final streamed = await _http.send(request);
+    final response = await http.Response.fromStream(streamed);
+    _ensureOk(response, expected: {204, 200});
+  }
+
   Future<String> rejectOrder(String orderId, {String reason = ''}) async {
     final response = await _http.post(
       _uri('/whatsbot/orders/$orderId/reject', {'reason': reason}),

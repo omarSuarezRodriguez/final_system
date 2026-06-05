@@ -123,6 +123,11 @@ class OwnerMessageCreate(BaseModel):
     body: str = Field(..., min_length=1)
 
 
+class DeviceTokenRegister(BaseModel):
+    token: str = Field(..., min_length=10, max_length=512)
+    platform: str = Field(default="android", pattern=r"^(android|ios)$")
+
+
 class OrderActionResponse(BaseModel):
     ok: bool
     message: str

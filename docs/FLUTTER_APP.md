@@ -94,6 +94,44 @@ La app guarda el JWT en `shared_preferences` y lo envía como `Authorization: Be
 - **Fallback:** REST cada 30 s solo si el WS no está conectado (`ApiConfig.fallbackPollInterval`).
 - Pull-to-refresh sigue disponible en la lista de chats.
 
+## Push FCM/APNs (Fase 11.4)
+
+Con la app en **background o cerrada**, el servidor envía push si no hay WebSocket activo.
+
+### Sin Firebase (degradación)
+
+La app funciona igual: WS + notificaciones locales. `PushService.init()` captura el error si no hay config Firebase.
+
+### Configurar Firebase (una vez)
+
+1. [Firebase Console](https://console.firebase.google.com/) → crear proyecto → añadir app **Android** e **iOS**.
+2. **Android:** descargar `google-services.json` → `whatsbot_app/android/app/google-services.json`
+3. **iOS:** descargar `GoogleService-Info.plist` → `whatsbot_app/ios/Runner/GoogleService-Info.plist`
+4. **Backend:** en Firebase → Configuración → Cuentas de servicio → generar clave JSON → guardar en `final_system/credentials/firebase-service-account.json` (gitignore).
+5. En `final_system/.env`:
+
+   ```env
+   FCM_ENABLED=true
+   FCM_SERVICE_ACCOUNT_JSON_PATH=credentials/firebase-service-account.json
+   ```
+
+6. `pip install -r requirements.txt` (incluye `firebase-admin`).
+7. Recompilar app: `flutter pub get && flutter run`.
+
+### Registro de token
+
+Tras login, `push_service.dart` llama `POST /whatsbot/device-token`. Al logout, `DELETE /whatsbot/device-token`.
+
+### Deep link
+
+Payload FCM incluye `conversation_id`. Tap en la notificación abre el chat (`messageAlerts.onOpenConversation`).
+
+### iOS adicional
+
+- Xcode → Runner → Signing & Capabilities → **Push Notifications**
+- `Info.plist` ya incluye `UIBackgroundModes` → `remote-notification`
+- Subir clave APNs en Firebase (Project Settings → Cloud Messaging)
+
 ## Validación Fase 9
 
 ```bash

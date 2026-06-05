@@ -1,5 +1,4 @@
-## v1.2
-
+## v1.3
 
 
 
@@ -629,6 +628,58 @@ Sí
 
 
 ## Resp cursor ##
+
+
+
+
+**Subfase 11.3 completada.** La app Flutter usa WebSocket en tiempo real; `flutter analyze` sin issues.
+
+## Cambios principales
+
+### Nuevo `RealtimeService`
+- Conecta a `wss://{API}/whatsbot/ws?token=JWT` tras login o restaurar sesión
+- Reconexión automática con backoff (1s → 2s → 4s → … → 30s)
+- Responde `ping` del servidor con `pong`
+- Al reconectar: sync REST con `?since=` para conversaciones perdidas
+
+### Pantallas actualizadas
+- **Lista de chats** — escucha `message.new` y `conversation.updated`; reordena al instante
+- **Chat** — burbujas nuevas vía WS; idempotencia por `message.id`
+- **Polling eliminado** (4s/8s) → fallback REST cada **30s** solo si el WS está caído (icono nube en AppBar)
+
+### Otros
+- Alertas desde eventos WS (`handleRealtimeMessage`)
+- Logout desconecta el WS
+- `api_client`: `accessToken`, `getConversations(since:)`, `getMessages(afterId:)`
+
+---
+
+## Cómo probar
+
+1. Reinicia la app (`flutter run` de nuevo — hot reload no basta para el nuevo servicio)
+2. Backend con `REALTIME_ENABLED=true`
+3. Login → deja la lista de chats abierta
+4. Envía un WhatsApp al bot → el chat debe aparecer/actualizarse al instante (sin esperar 4s)
+
+Si ves el icono de nube en el AppBar, el WS no está conectado y entra el fallback REST de 30s.
+
+---
+
+## Pendiente (11.4+)
+
+- Push FCM con app en background/cerrada
+- Ticks de estado (✓ / ✓✓)
+- Pedidos live sin polling REST
+
+¿Procedo con **11.4 (FCM/APNs)**?
+
+
+
+
+
+
+###########################################################
+
 
 
 
