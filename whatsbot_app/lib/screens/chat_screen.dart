@@ -2,6 +2,7 @@ import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:uuid/uuid.dart';
 
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
@@ -47,6 +48,8 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
   StreamSubscription<List<ChatMessage>>? _messagesSub;
+  int _uiPendingMessageId = -100000;
+  static const _uuid = Uuid();
 
   MessageRepository get _messageRepo => AppServices.messageRepository;
   ChatRepository get _chats => AppServices.chatRepository;
@@ -141,10 +144,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// SQLite puede emitir vacío un instante al reemplazar id temporal → id servidor.
+  /// También conserva mensajes confirmados en memoria hasta que Drift los refleje.
   List<ChatMessage> _reconcileMessagesFromStore(List<ChatMessage> store) {
     final merged = List<ChatMessage>.from(store);
     for (final local in _displayMessages) {
-      if (local.id >= 0) continue;
       final exists = store.any(
         (m) =>
             m.id == local.id ||
@@ -359,31 +362,40 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final text = _inputController.text.trim();
     if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
+
+    final clientUuid = _uuid.v4();
+    final now = DateTime.now().toUtc();
+    final pending = ChatMessage(
+      id: _uiPendingMessageId--,
+      conversationId: widget.conversation.id,
+      direction: 'outgoing',
+      body: text,
+      waId: widget.conversation.customerWaId,
+      isAdmin: true,
+      channel: 'whatsapp',
+      status: 'pending',
+      createdAt: now,
+      clientUuid: clientUuid,
+    );
+
+    setState(() {
+      _sending = true;
+      _mergeIncomingMessage(pending);
+    });
     _inputController.clear();
+    _onMessagesUpdated(_displayMessages);
+    _scrollToBottom(force: true);
     realtimeService.sendTyping(
       conversationId: widget.conversation.id,
       isTyping: false,
     );
     try {
-      final sendFuture = _messageRepo.sendMessage(
+      final result = await _messageRepo.sendMessage(
         conversationId: widget.conversation.id,
         customerWaId: widget.conversation.customerWaId,
         body: text,
+        clientUuid: clientUuid,
       );
-      await Future<void>.delayed(Duration.zero);
-      if (mounted) {
-        final optimistic =
-            await _messageRepo.getCachedMessages(widget.conversation.id);
-        if (mounted) {
-          setState(
-            () => _displayMessages = _reconcileMessagesFromStore(optimistic),
-          );
-          _onMessagesUpdated(_displayMessages);
-          _scrollToBottom(force: true);
-        }
-      }
-      final result = await sendFuture;
       if (!mounted) return;
       setState(() => _mergeIncomingMessage(result.message));
       _onMessagesUpdated(_displayMessages);
@@ -489,9 +501,12 @@ class _ChatScreenState extends State<ChatScreen> {
                         }
                         final messageIndex =
                             messages.length - 1 - (i - typingOffset);
+                        final message = messages[messageIndex];
                         return MessageBubble(
-                          key: ValueKey(messages[messageIndex].id),
-                          message: messages[messageIndex],
+                          key: ValueKey(
+                            message.clientUuid ?? 'msg-${message.id}',
+                          ),
+                          message: message,
                         );
                       },
                     ),

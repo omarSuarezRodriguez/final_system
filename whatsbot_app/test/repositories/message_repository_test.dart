@@ -62,6 +62,64 @@ void main() {
     expect(local.single.id, result.message.id);
   });
 
+  test('sendMessage conserva conversationId local si el servidor difiere', () async {
+    final altApi = TestApiClient(sendConversationId: 99);
+    await altApi.login();
+    final altDb = AppDatabase.forTesting(NativeDatabase.memory());
+    final altRepo = MessageRepository(altDb, altApi.client);
+
+    final result = await altRepo.sendMessage(
+      conversationId: 1,
+      customerWaId: '+5491111111111',
+      body: 'Hola con conv distinta',
+    );
+
+    expect(result.queued, isFalse);
+    expect(result.message.conversationId, 1);
+
+    final local = await altRepo.watchMessages(1).first;
+    expect(local.single.body, 'Hola con conv distinta');
+    expect(local.single.conversationId, 1);
+
+    final otherConv = await altRepo.watchMessages(99).first;
+    expect(otherConv, isEmpty);
+
+    await altDb.close();
+  });
+
+  test('upsertMessageDeduped conserva conversationId tras WS con otro id', () async {
+    final altApi = TestApiClient(sendConversationId: 99);
+    await altApi.login();
+    final altDb = AppDatabase.forTesting(NativeDatabase.memory());
+    final altRepo = MessageRepository(altDb, altApi.client);
+
+    final sendResult = await altRepo.sendMessage(
+      conversationId: 1,
+      customerWaId: '+5491111111111',
+      body: 'Tras WS',
+    );
+    expect(sendResult.message.conversationId, 1);
+
+    // Simula message.new del WS: mismo id, otra conversación, status delivered.
+    await altRepo.upsertMessageDeduped(
+      sendResult.message.copyWith(
+        conversationId: 99,
+        status: 'delivered',
+        deliveredAt: DateTime.utc(2026, 6, 5, 14),
+      ),
+    );
+
+    final local = await altRepo.watchMessages(1).first;
+    expect(local.single.body, 'Tras WS');
+    expect(local.single.conversationId, 1);
+    expect(local.single.status, 'delivered');
+
+    final otherConv = await altRepo.watchMessages(99).first;
+    expect(otherConv, isEmpty);
+
+    await altDb.close();
+  });
+
   test('flushOutboundQueue reenvía mensajes pendientes', () async {
     testApi.failSend = true;
     await repository.sendMessage(

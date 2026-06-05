@@ -1,13 +1,21 @@
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:whatsbot_app/data/local/app_database.dart';
+import 'package:whatsbot_app/data/repositories/chat_repository.dart';
+import 'package:whatsbot_app/data/repositories/message_repository.dart';
+import 'package:whatsbot_app/data/sync/sync_engine.dart';
 import 'package:whatsbot_app/di/app_services.dart';
 import 'package:whatsbot_app/models/conversation.dart';
 import 'package:whatsbot_app/models/message.dart';
 import 'package:whatsbot_app/models/realtime_event.dart';
 import 'package:whatsbot_app/screens/chat_screen.dart';
+import 'package:whatsbot_app/services/api_client.dart';
+import 'package:whatsbot_app/services/realtime_service.dart';
 import 'package:whatsbot_app/widgets/message_bubble.dart';
 
 import '../helpers/realtime_test_helper.dart';
+import '../helpers/test_api_client.dart';
 import '../helpers/test_app_services.dart';
 
 void main() {
@@ -254,6 +262,38 @@ void main() {
 
     await disposeWidgetTree(tester);
   });
+
+  testWidgets(
+    'ChatScreen muestra mensaje enviado aunque el servidor use otro conversation_id',
+    (WidgetTester tester) async {
+      await tearDownTestAppServices();
+      final testApi = TestApiClient(sendConversationId: 99);
+      apiClient.replaceHttpClient(testApi.mockHttp);
+      await testApi.login();
+      await apiClient.login('default', 'pin');
+
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      AppServices.database = db;
+      AppServices.chatRepository = ChatRepository(db, apiClient);
+      AppServices.messageRepository = MessageRepository(db, apiClient);
+      AppServices.syncEngine = SyncEngine(
+        AppServices.chatRepository,
+        AppServices.messageRepository,
+      );
+      realtimeService.disableSocketForTesting = true;
+
+      await pumpChatScreen(tester, initialMessages: const []);
+
+      await tester.enterText(find.byType(TextField), 'Kekeke');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text('Kekeke'), findsOneWidget);
+
+      await disposeWidgetTree(tester);
+    },
+  );
 
   testWidgets('ChatScreen usa TextCapitalization.sentences en el TextField', (
     WidgetTester tester,

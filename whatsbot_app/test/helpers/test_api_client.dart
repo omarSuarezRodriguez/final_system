@@ -12,6 +12,7 @@ class TestApiClient {
   TestApiClient({
     this.failSend = false,
     this.failConversations = false,
+    this.sendConversationId = 1,
     List<Map<String, dynamic>>? conversations,
     Map<int, List<Map<String, dynamic>>>? messagesByConversation,
   })  : conversations = List<Map<String, dynamic>>.from(conversations ?? []),
@@ -21,6 +22,7 @@ class TestApiClient {
 
   bool failSend;
   bool failConversations;
+  final int sendConversationId;
   final List<Map<String, dynamic>> conversations;
   final Map<int, List<Map<String, dynamic>>> messagesByConversation;
   int _nextMessageId = 1000;
@@ -114,7 +116,7 @@ class TestApiClient {
         final id = _nextMessageId++;
         final message = {
           'id': id,
-          'conversation_id': 1,
+          'conversation_id': sendConversationId,
           'direction': 'outgoing',
           'body': body['body'],
           'wa_id': body['customer_wa_id'],
@@ -122,9 +124,11 @@ class TestApiClient {
           'channel': 'whatsapp',
           'status': 'sent',
           'created_at': DateTime.now().toUtc().toIso8601String(),
-          'client_id': ?clientId,
+          'client_id': clientId,
         };
-        messagesByConversation.putIfAbsent(1, () => []).add(message);
+        messagesByConversation
+            .putIfAbsent(sendConversationId, () => [])
+            .add(message);
         return http.Response(
           jsonEncode(message),
           201,

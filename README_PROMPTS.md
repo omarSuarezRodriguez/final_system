@@ -1,4 +1,4 @@
-## v1.24
+## v1.25
 
 
 
@@ -3192,15 +3192,17 @@ Nota en `docs/INCREMENTAL_GUIDE.md` (sección v1.19). Si no ves los cambios, haz
 ##################################
 ## v1.24
 
-Aquí tienes un prompt reutilizable, autocontenido y sin referencias a archivos `.md`:
 
----
 
-```
+## prompt ##
+
+
 MEJORA INCREMENTAL — WhatsBot
 
 Objetivo (describe solo esto, nada más):
-[PEGA AQUÍ LA MEJORA CONCRETA — 1 a 3 puntos máximo]
+[
+1. Al enviar un mensaje desde un chat abierto, debe visualizarse el mensaje en el chat, porque los enviados a manualmente a travé´s de whatsbot no se ven, tienes que hacer que se vean.
+2. Los chats con mensaje nuevo deben quedar primero, osea el orden, como WhatsApp.]
 
 ---
 
@@ -3244,15 +3246,143 @@ ENTREGABLE
 4. Checklist manual (2–4 pasos) para que yo verifique en la app.
 
 Si el objetivo es ambiguo, haz una suposición razonable, implementa la mínima solución correcta y declara la suposición en una línea.
+
+
+
+
+
+## resp cursor ##
+
+
+
+## Resumen (v1.24)
+
+**Problema 1 — mensaje enviado no visible en el chat:** Al enviar, SQLite puede emitir una lista vacía al reemplazar el id temporal por el del servidor, y la UI dependía solo del stream sin merge explícito. Además, el scroll no se activaba en el primer mensaje.
+
+**Problema 2 — orden de chats:** Los envíos salientes ya actualizaban SQLite vía `sync_engine`, pero la lista ignoraba `message.new` salientes y a veces no se redibujaba.
+
+**Suposición:** El bug principal era en pantalla (transición optimista → confirmado), no en la API.
+
+## Archivos tocados
+
+- `whatsbot_app/lib/screens/chat_screen.dart`
+- `whatsbot_app/lib/screens/chats_list_screen.dart`
+- `whatsbot_app/test/screens/chat_screen_test.dart`
+- `docs/INCREMENTAL_GUIDE.md`
+
+## Validación ejecutada
+
+```text
+flutter pub get  → OK
+flutter analyze  → No issues found
+flutter test     → 32 tests passed
 ```
+
+## Checklist manual (en el dispositivo con `flutter run`)
+
+1. Abre un chat → escribe y envía → la burbuja debe aparecer al instante y quedarse visible (sin duplicados).
+2. Envía otro mensaje en un chat vacío → debe verse y hacer scroll al fondo.
+3. Vuelve a la lista → ese chat debe estar arriba con tu mensaje como preview.
+4. Recibe un mensaje de un cliente → ese chat debe subir al tope al instante.
+
+Haz **hot restart** (`R` en la terminal de Flutter) para cargar los cambios.
+
+
+
+
+
+########################################
+## v1.25
+
+
+## prompt ##
+
+IMPORTANTE — Mejoras incrementales conservando integridad total
+
+Antes de realizar cualquier cambio:
+
+1. Analiza toda la funcionalidad relacionada con la tarea (flujos, pantallas, servicios, APIs, tests y configuración).
+2. Identifica dependencias y posibles efectos secundarios.
+3. Anticipa qué podría verse afectado indirectamente (otros flujos, permisos, cachés, sincronización, estados, etc.).
+4. Define el límite del cambio: solo modifica lo estrictamente necesario.
+
+Reglas de implementación:
+
+5. Cambio mínimo e incremental: usa el diff más pequeño posible.
+6. NO modifiques archivos, funciones o componentes que no estén directamente relacionados con esta tarea.
+7. Mantén intacta toda la lógica y el comportamiento existente (reglas de negocio, contratos de API, formatos de datos, flujos de usuario).
+8. No refactorices, renombres ni reorganices código fuera del alcance solicitado.
+9. Si necesitas cambiar algo fuera del alcance, detente y explícame primero: qué problema encontraste, por qué no se puede resolver solo dentro del alcance, y qué alternativa mínima propones.
+10. Verifica que no se rompan funcionalidades existentes (tests o validación manual).
+
+Tarea:
+[
+
+Mira la imagen que te paso en el prompt, te la paso para explicarte qué es lo que sucede y que lo arregles, ahí se ve Kekeke, un mensaje, entonces si le doy al boton de enviar, el mensaje se envia y le llega al cliente, pero no puedo verlo ahí, osea ahi en esa ventana como enviado, simplemente le doy al boton de enviar, se envia, llega al otro lado (porque miro el celular del cliente), pero en esa ventana de chat que te muestro, al enviar, no se muestra ahi el kekeke, sigue el Hola (en este caso), por favor repara eso y verifica que funciona correctamente
+
+]
+
+Criterio de éxito:
+- La mejora solicitada queda implementada.
+- El resto del sistema se comporta igual que antes.
+- No hay cambios colaterales no justificados.
+
+Al finalizar, indícame exactamente:
+1. Archivos modificados.
+2. Qué cambió en cada archivo (qué se añadió, ajustó o eliminó y por qué).
+3. Qué no tocaste y por qué.
+4. Cómo verificaste que no hay regresiones.
+5. Riesgos residuales (si los hay).
+
+
+## resp cursor ##
+
+
+
+## Problema resuelto
+
+Al enviar un mensaje (p. ej. "Kekeke"), **llegaba al cliente por WhatsApp** pero **desaparecía del chat en la app**. La causa era una combinación de dos fallos:
+
+1. **Al confirmar el envío**, el mensaje se guardaba en SQLite con el `conversation_id` del **servidor**, que puede diferir del chat abierto (cuando el backend canonicaliza el `wa_id`, p. ej. `35699155990` vs `+35699155990`).
+2. **`_reconcileMessagesFromStore`** solo conservaba mensajes con id temporal (`id < 0`). Cuando Drift emitía la lista de la conversación abierta (sin el mensaje mal guardado), **borraba el mensaje confirmado de la UI**.
 
 ---
 
-Sustituye solo el bloque `[PEGA AQUÍ LA MEJORA...]`. Ejemplo:
+### Archivos modificados
 
-```
-Objetivo:
-1. Al enviar un mensaje desde un chat abierto, debe visualizarse el mensaje en el chat, porque los enviados a manualmente a travé´s de whatsbot no se ven, tienes que hacer que se vean.
-2. Los chats con mensaje nuevo deben quedar primero, osea el orden, como WhatsApp.
-```
+| Archivo | Cambio |
+|---------|--------|
+| `whatsbot_app/lib/data/repositories/message_repository.dart` | `_ackOutbound` conserva el `conversationId` local; devuelve el mensaje resuelto; `sendMessage` retorna ese mensaje |
+| `whatsbot_app/lib/screens/chat_screen.dart` | `_reconcileMessagesFromStore` conserva cualquier mensaje local no presente en SQLite (por id o `clientUuid`); clave de burbuja por `clientUuid` |
+| `whatsbot_app/test/helpers/test_api_client.dart` | Parámetro `sendConversationId` para simular el desajuste servidor/app |
+| `whatsbot_app/test/repositories/message_repository_test.dart` | Test de conservación de `conversationId` |
+| `whatsbot_app/test/screens/chat_screen_test.dart` | Test de UI con `conversation_id` distinto en el servidor |
 
+---
+
+### Qué no toqué
+
+- Backend/API, Twilio, WebSocket, lista de chats, sync engine, burbujas, lógica de pedidos — no relacionados con este bug.
+
+---
+
+### Verificación
+
+- 16 tests pasando (`message_repository_test` + `chat_screen_test`), incluidos los nuevos del escenario reportado.
+- Tests previos de envío optimista y confirmación siguen pasando.
+
+---
+
+### Riesgo residual
+
+Si en el servidor existen **conversaciones duplicadas** para el mismo cliente (formatos distintos de `wa_id`), el mensaje se guardará bien en la app, pero la lista de chats podría seguir mostrando conversaciones separadas. Eso sería un arreglo de backend/deduplicación, no de esta pantalla.
+
+---
+
+**Para probar:** con `flutter run` activo, haz hot restart (`R`), abre el chat de Omar Suarez, envía "Kekeke" y debería aparecer de inmediato como burbuja verde enviada.
+
+
+
+
+
+#######################################

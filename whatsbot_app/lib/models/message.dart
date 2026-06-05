@@ -41,13 +41,14 @@ class ChatMessage {
   }
 
   ChatMessage copyWith({
+    int? conversationId,
     String? status,
     DateTime? deliveredAt,
     DateTime? readAt,
   }) {
     return ChatMessage(
       id: id,
-      conversationId: conversationId,
+      conversationId: conversationId ?? this.conversationId,
       direction: direction,
       body: body,
       waId: waId,
