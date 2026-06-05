@@ -81,6 +81,27 @@ void main() {
     expect(local.single.status, 'sent');
   });
 
+  test('needsSyncFromApi true sin caché y false tras sync reciente', () async {
+    expect(await repository.needsSyncFromApi(1), isTrue);
+
+    await repository.upsertMessage(
+      ChatMessage(
+        id: 1,
+        conversationId: 1,
+        direction: 'incoming',
+        body: 'Hola',
+        waId: '+5491111111111',
+        isAdmin: false,
+        channel: 'whatsapp',
+        status: 'delivered',
+        createdAt: DateTime.utc(2026, 1, 1, 12),
+      ),
+    );
+    await db.syncCursorDao.setCursor('messages_sync_at:1', '1');
+
+    expect(await repository.needsSyncFromApi(1), isFalse);
+  });
+
   test('upsertMessageDeduped omite mensajes idénticos', () async {
     final message = ChatMessage(
       id: 50,

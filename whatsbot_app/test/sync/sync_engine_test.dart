@@ -73,6 +73,43 @@ void main() {
     expect(conversation?.lastMessagePreview, 'Desde WS');
   });
 
+  test('syncMessagesIncremental omite sync si caché reciente', () async {
+    testApi.messagesByConversation[1] = [
+      {
+        'id': 10,
+        'conversation_id': 1,
+        'direction': 'incoming',
+        'body': 'Cacheado',
+        'wa_id': '+5491111111111',
+        'is_admin': false,
+        'channel': 'whatsapp',
+        'status': 'delivered',
+        'created_at': DateTime.utc(2026, 6, 1, 11).toIso8601String(),
+      },
+    ];
+    await messages.refreshFromApi(1, incremental: true);
+    testApi.messagesByConversation[1] = [
+      {
+        'id': 11,
+        'conversation_id': 1,
+        'direction': 'incoming',
+        'body': 'Nuevo',
+        'wa_id': '+5491111111111',
+        'is_admin': false,
+        'channel': 'whatsapp',
+        'status': 'delivered',
+        'created_at': DateTime.utc(2026, 6, 1, 12).toIso8601String(),
+      },
+    ];
+
+    final skipped = await engine.syncMessagesIncremental(1);
+    expect(skipped, isEmpty);
+
+    final stored = await messages.watchMessages(1).first;
+    expect(stored, hasLength(1));
+    expect(stored.single.id, 10);
+  });
+
   test('syncOnReconnect vacía cola saliente pendiente', () async {
     testApi.failSend = true;
     await messages.sendMessage(

@@ -417,3 +417,13 @@ flutter test
 - `chat_screen.dart`: fase `_openingConversation` oculta la lista (`Opacity: 0`) hasta el `jumpTo` final tras sync/cache.
 - Solo `animateTo` cuando el chat ya está abierto y el usuario está al fondo (mensaje nuevo o envío).
 - Evita el desplazamiento visible al cargar historial incremental desde SQLite + red.
+
+---
+
+## Chat: apertura instantánea desde caché (comportamiento WhatsApp) ✅
+
+- `chat_screen.dart`: mensajes visibles al instante desde `watchMessages` (SQLite); sin `Opacity: 0` ni spinner si hay caché.
+- `jumpTo` al fondo en el primer frame (`_needsInitialScroll`); sync de red en background sin bloquear UI.
+- Spinner solo si `messages.isEmpty` y no hay datos locales (primera apertura).
+- `SyncEngine.syncMessagesIncremental`: guard con TTL 2 min + cursor (`needsSyncFromApi`); `force: true` al reconectar.
+- Reabrir conversación visitada: sin loading ni re-sync innecesario; actualización solo si hay delta real (WS o TTL).

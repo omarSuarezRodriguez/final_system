@@ -1,4 +1,4 @@
-## v1.14 - Chat: apertura sin scroll visible
+## v1.15
 
 
 
@@ -2044,4 +2044,175 @@ Nota breve en `docs/INCREMENTAL_GUIDE.md` (sección “Chat: apertura sin scroll
 
 
 #################################################################
+## v1.15
+
+
+## prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+MEJORA: Chat instantáneo desde caché (comportamiento WhatsApp)
+
+## Contexto
+
+Se implementó "Chat: apertura sin scroll visible" en `chat_screen.dart` usando `_openingConversation`:
+oculta la lista (`Opacity: 0`) y muestra `CircularProgressIndicator` hasta que termina `syncMessagesIncremental`.
+
+**Problema actual (regresión UX):**
+- Cada vez que abro un chat, aparece un estado de "cargando" aunque ya visité esa conversación antes.
+- Se siente lento y feo; no es como WhatsApp.
+- La UI espera al sync de red antes de mostrar mensajes, aunque SQLite ya tenga el historial local.
+
+## Comportamiento deseado (referencia: WhatsApp)
+
+### Al abrir una conversación
+
+1. **Mostrar mensajes al instante** desde SQLite (`MessageRepository.watchMessages`) — sin spinner si ya hay datos en caché.
+2. **Posicionar al último mensaje sin animación visible** (sin scroll animado desde arriba).
+3. **No bloquear la UI** esperando respuesta de red.
+4. El usuario debe percibir apertura **inmediata**, como si el chat ya estuviera en memoria.
+
+### Sync en background (solo cuando haga falta)
+
+5. La red **no debe ser prerequisito** para ver el chat.
+6. `SyncEngine.syncMessagesIncremental` debe ejecutarse **en segundo plano**, sin ocultar la lista ni mostrar loading global.
+7. Solo actualizar la UI si hay **cambios reales** (mensajes nuevos, estados, deltas del cursor).
+8. Si el sync no trae nada nuevo → **cero parpadeo, cero re-render innecesario**.
+9. Re-sincronizar al abrir solo si:
+   - la conversación nunca se sincronizó, o
+   - el cursor local está desactualizado, o
+   - pasó mucho tiempo desde el último sync (TTL razonable), o
+   - llegó un evento WS / push que indique cambio.
+10. **No** disparar sync completo en cada `initState` de `ChatScreen` si la caché ya está hidratada.
+
+### Al reabrir la misma conversación
+
+11. Debe abrir **igual de rápido** que la primera vez con caché poblada: sin loading, sin "buscar de nuevo".
+12. Los mensajes ya vistos viven en SQLite + streams locales; la pantalla solo **escucha cambios**.
+
+### Scroll (mantener mejora anterior, sin sacrificar UX)
+
+13. Sin `animateTo` en la apertura inicial.
+14. `jumpTo` al fondo en el primer frame con datos locales — **sin ocultar el chat**.
+15. Eliminar el patrón `_openingConversation` + spinner encima de mensajes si la caché tiene contenido.
+16. Spinner solo si `messages.isEmpty` **y** no hay datos locales (primera vez / conversación vacía).
+
+### Tiempo real
+
+17. Mensajes nuevos vía WebSocket (`RealtimeService` → SQLite → stream) actualizan el chat sin reabrir ni recargar.
+18. Auto-scroll animado **solo** si el usuario está al fondo y llega/envía un mensaje nuevo.
+
+## Archivos a revisar (prioridad)
+
+- `whatsbot_app/lib/screens/chat_screen.dart` — lógica de apertura, `_refresh`, `_openingConversation`, spinner
+- `whatsbot_app/lib/data/repositories/message_repository.dart` — stream local
+- `whatsbot_app/lib/sync/sync_engine.dart` — `syncMessagesIncremental`, `trackOpenConversation`, cuándo sync
+- `whatsbot_app/lib/data/local/` — cursores `sync_cursors`, TTL
+- `whatsbot_app/lib/services/realtime_service.dart` — eventos → DB sin forzar reload de pantalla
+
+## Tareas concretas
+
+1. Auditar por qué `ChatScreen` siempre entra en estado "cargando" al reabrir.
+2. Separar **"mostrar caché"** de **"sincronizar red"** — dos fases independientes.
+3. Hacer que `_refresh(silent: true)` en `initState` sea no bloqueante para la UI si hay mensajes locales.
+4. Añadir guard en `SyncEngine` para no repetir sync si no hay delta pendiente (usar cursor + timestamp).
+5. Quitar loading visual cuando `watchMessages` ya emitió datos.
+6. Mantener scroll instantáneo al fondo sin `Opacity: 0` ni overlay de spinner sobre mensajes existentes.
+7. Verificar reentrada: abrir chat A → volver → abrir chat A → abrir chat B → volver → abrir chat A (siempre instantáneo con caché).
+
+## No romper
+
+- Offline-first (Drift SQLite)
+- Cola saliente offline
+- Paginación / retención 500 msgs
+- WS → DB → UI
+- Indicador leído/no leído
+- `message_alerts_service`
+- Aprobar/rechazar pedidos en chat
+
+## Criterios de aceptación
+
+- [ ] Abrir chat con historial en caché: mensajes visibles en < 100 ms percibidos, sin spinner.
+- [ ] Sin animación de scroll al abrir.
+- [ ] Sync de red ocurre en background; la UI no se congela ni se oculta.
+- [ ] Reabrir el mismo chat no muestra loading ni "busca de nuevo".
+- [ ] Solo hay actualización visible cuando llega un mensaje/cambio real.
+- [ ] Comportamiento equivalente a WhatsApp en conversaciones ya visitadas.
+
+## Antes de finalizar
+
+- Explicar qué causaba el loading en cada apertura y qué cambió.
+- Listar archivos modificados.
+- Nota breve en `docs/INCREMENTAL_GUIDE.md`.
+- `cd whatsbot_app && flutter analyze && flutter test`
+
+REGLAS:
+- Cambio mínimo; no tocar lógica de chatbot/gateway ni intents
+- UI solo Flutter (`whatsbot_app/`)
+- Si toca API: `validate_system.py` + pytest
+- `validate_chatbot.py` al final solo si tocaste backend
+
+
+
+
+## resp cursor ##
+
+## Causa del loading en cada apertura
+
+Había **tres factores** que se combinaban:
+
+1. **`_openingConversation = true` siempre en `initState`** — aunque SQLite ya tuviera mensajes, la UI los ocultaba con `Opacity: 0` y mostraba un `CircularProgressIndicator` encima.
+2. **`_refresh(silent: true)` esperaba al sync de red** — `_openingConversation` solo pasaba a `false` después de que terminara `syncMessagesIncremental`, no cuando el stream local emitía datos.
+3. **Sync en cada apertura sin guard** — `syncMessagesIncremental` llamaba a la API siempre, aunque la caché estuviera reciente.
+
+## Qué cambió
+
+### `chat_screen.dart`
+- `_openingConversation` → `_needsInitialScroll` (solo controla el `jumpTo` inicial, **no oculta** la lista).
+- Eliminados `Opacity: 0`, `IgnorePointer` y el spinner superpuesto sobre mensajes existentes.
+- Spinner **solo** si `messages.isEmpty && _refreshing` (primera vez sin caché).
+- `_refresh(silent: true)` con caché: **no activa** `_refreshing`; el sync corre en background sin bloquear la UI.
+- `jumpTo` al fondo en el primer frame con datos locales, sin animación.
+
+### `sync_engine.dart` + `message_repository.dart`
+- `needsSyncFromApi()`: salta sync si hay caché y el último sync fue hace menos de **2 minutos**.
+- `syncMessagesIncremental(force: true)` al reconectar (mantiene el comportamiento offline-first).
+- Timestamp de sync en `sync_cursors` (`messages_sync_at:{id}`).
+
+### `sync_cursor_dao.dart`
+- Nuevo `getUpdatedAt(key)` para el TTL.
+
+## Archivos modificados
+
+| Archivo | Cambio |
+|---------|--------|
+| `whatsbot_app/lib/screens/chat_screen.dart` | Apertura instantánea desde caché |
+| `whatsbot_app/lib/data/sync/sync_engine.dart` | Guard TTL en sync incremental |
+| `whatsbot_app/lib/data/repositories/message_repository.dart` | `needsSyncFromApi` + marca de sync |
+| `whatsbot_app/lib/data/local/daos/sync_cursor_dao.dart` | `getUpdatedAt` |
+| `whatsbot_app/test/sync/sync_engine_test.dart` | Test skip sync con caché reciente |
+| `whatsbot_app/test/repositories/message_repository_test.dart` | Test `needsSyncFromApi` |
+| `docs/INCREMENTAL_GUIDE.md` | Nota de la mejora |
+
+## Validación
+
+```
+flutter analyze → No issues found!
+flutter test    → 11 passed
+```
+
+## Comportamiento esperado ahora
+
+- **Chat con historial en caché** → mensajes visibles al instante, sin spinner.
+- **Sync de red** → en background; la UI no se congela ni se oculta.
+- **Reabrir el mismo chat** → igual de rápido; sin loading ni re-sync si el TTL no venció.
+- **Mensajes nuevos vía WS** → siguen llegando por `RealtimeService` → SQLite → stream, sin reabrir.
+- **Auto-scroll animado** → solo si el usuario está al fondo y llega/envía un mensaje nuevo.
+
+
+
+
+#############################################################
 
