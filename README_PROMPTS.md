@@ -1,4 +1,4 @@
-## v1.8
+## v1.9
 
 
 
@@ -1168,14 +1168,59 @@ Los viejos **Prompt 12–14** (corrección, mejora incremental, alta negocio) ch
 
 
 ########################################################
+## v1.8
+
+## prompt ##
+
+ok entonces dame un MD en la raiz que de los pasos de cómo poner el proyecto en producción con docker sencillo y facil solo un documento e incluye todo lo necesario
+
+
+## resp cursor ##
+
+Listo. Creé **`DEPLOY_DOCKER.md`** en la raíz del proyecto. Es un solo documento con todo lo necesario:
+
+### Qué incluye
+- Arquitectura (Caddy HTTPS → API → PostgreSQL)
+- Requisitos (VPS, dominio, Docker, credenciales)
+- **3 archivos para copiar:** `Dockerfile`, `docker-compose.yml`, `Caddyfile`
+- Plantilla `.env` de producción (Twilio, JWT, PIN, PostgreSQL, tiempo real)
+- Pasos numerados del 1 al 8
+- Inicialización de BD (`migrate_db` + `onboard`) — **solo la primera vez**
+- Configuración webhook Twilio
+- Compilar Flutter APK con la URL de producción
+- Comandos útiles, firewall, backup
+- Firebase opcional (app cerrada)
+- Segundo negocio y troubleshooting
+
+### Flujo resumido
+1. VPS + dominio + Docker  
+2. Crear los 3 archivos Docker del doc  
+3. Rellenar `.env`  
+4. `docker compose up -d --build`  
+5. Migrar BD una vez  
+6. Twilio → `https://tu-dominio/webhook`  
+7. Flutter con `apiBaseUrl` HTTPS → `flutter build apk`  
+
+Los archivos Docker **no están creados en el repo** todavía — van dentro del MD para que los copies cuando despliegues. Si quieres, en otro mensaje puedo añadir `Dockerfile`, `docker-compose.yml` y `Caddyfile` reales al proyecto para no tener que copiarlos a mano.
 
 
 
 
+#########################################################
+## v1.9
+
+
+## 1 implementación
+
+Se hizo
+
+python scripts/migrate_db.py
+
+para inicializar DB
 
 
 
-
+##
 
 
 

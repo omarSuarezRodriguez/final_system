@@ -729,3 +729,43 @@ Cuando quieras, escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
 Escribe *inicio* para volver al inicio
 
 #################################################################
+################################################################
+
+Cliente: quepanchó
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: keke
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: keeee
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
+################################################################
+
+Cliente: keke
+
+
+-------------------------------
+
+Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
+
+#################################################################
