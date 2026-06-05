@@ -1,4 +1,4 @@
-## v1.17.
+## v1.18
 
 
 
@@ -2753,7 +2753,41 @@ Si quieres, el siguiente paso incremental podría ser documentar esto en `README
 
 
 #################################################
+## v1.18
+
+## prompts ##
 
 
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+
+MEJORA: [Revisa por qué en whatsbot_app/test/helpers/test_app_services.dart tiene error, y arreglalo, solo toca ese archivo]
+
+REGLAS:
+- Cambio mínimo; no tocar lógica de chatbot/gateway ni intents
+- UI solo Flutter (whatsbot_app/)
+- Si toca API: validate_system.py + pytest
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+- validate_chatbot.py al final si tocaste backend
+
+## resp cursor ##
+
+**Problema:** `test_app_services.dart` llamaba a `AppServices.initForTesting()` y `AppServices.resetForTesting()`, métodos que no existen en `AppServices` (solo tiene `init()` con el `apiClient` global).
+
+**Solución:** El helper ahora inicializa directamente los campos estáticos públicos de `AppServices` con SQLite en memoria y `TestApiClient`, replicando lo que haría `initForTesting`:
+
+- Asigna `database`, `chatRepository`, `messageRepository` y `syncEngine`
+- Conecta los callbacks de `realtimeService` (como `_wireRealtime()` en producción)
+- En `tearDown` solo desconecta WS y cierra la DB
+
+`flutter analyze test/helpers/test_app_services.dart` pasa sin errores. Los widget tests no se pudieron ejecutar aquí por un fallo de entorno en Windows (`sqlite3.dll` ya existe en `build/native_assets`); no está relacionado con este cambio.
+
+Nota breve añadida en `docs/INCREMENTAL_GUIDE.md` (sección OF-E). No se tocó backend, así que `validate_chatbot.py` no aplica.
+
+
+
+
+##############################################
 
 

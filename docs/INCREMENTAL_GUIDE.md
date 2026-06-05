@@ -410,6 +410,8 @@ flutter test
 
 **Fases offline-first cerradas.** Pedidos offline (aprobar/rechazar sin red) quedan fuera de alcance.
 
+**Nota (2026-06):** `test/helpers/test_app_services.dart` cablea `AppServices` en memoria (DB + `TestApiClient`) porque `AppServices` no expone `initForTesting`/`resetForTesting`.
+
 ---
 
 ## Chat: apertura sin scroll visible ✅
