@@ -1,4 +1,4 @@
-## v1.5
+## v1.7
 
 
 
@@ -818,6 +818,142 @@ Sí
 ## resp cursor ##
 
 
+**Fase 11 cerrada.** Subfase 11.6 completada; validación E2E en verde.
+
+## 11.6 — Qué se hizo
+
+### `validate_system.py` ampliado
+Nueva sección **Realtime (Fase 11)**:
+- `realtime_enabled` en `/health`
+- `POST /whatsbot/device-token`
+- WS connect + ping/pong
+- `message.new` tras envío del dueño
+- `POST mark-read` + `GET conversations?since=`
+- Migración `migrate_message_status` en el setup
+
+### Documentación
+- **README.md** — sección tiempo real, variables `.env`, checklist Fase 11
+- **ARCHITECTURE.md** — diagrama WS + FCM
+- **INCREMENTAL_GUIDE.md** — nota 11.6, fase cerrada
+- API versión **0.9.0**
+
+### Validación ejecutada
+
+| Check | Resultado |
+|-------|-----------|
+| `validate_system.py` | **0 fallos** |
+| `validate_chatbot.py` | **0 fallos** |
+| `pytest tests/` | **29 passed** |
+| `flutter analyze` | **No issues** (de fases anteriores) |
+
+---
+
+## Resumen Fase 11 completa
+
+| Subfase | Entregable |
+|---------|------------|
+| **11.1** | Análisis WS vs SSE, mapa de archivos |
+| **11.2** | Backend WS + eventos BD + sync REST |
+| **11.3** | Flutter `RealtimeService`, sin polling principal |
+| **11.4** | Push FCM/APNs + device tokens |
+| **11.5** | Estados mensaje, ticks, pedidos live, typing |
+| **11.6** | E2E automatizado + docs |
+
+---
+
+## En tu entorno (si aún no lo hiciste)
+
+```bash
+cd final_system
+python scripts/migrate_message_status.py
+python -m api.main
+# Otra terminal:
+cd whatsbot_app && flutter run
+```
+
+Para push real: configura Firebase según `docs/FLUTTER_APP.md` y `FCM_ENABLED=true` en `.env`.
+
+---
+
+## Pendiente opcional (fuera de Fase 11)
+
+- Redis pub/sub para múltiples instancias Railway
+- Read receipts reales vía Twilio
+- Typing desde el cliente WhatsApp (no solo el dueño en la app)
+
+¿Quieres que arme el bloque corto en `README_PROMPTS.md` para futuras fases, o prefieres probar el flujo manual primero?
+
+
+
+
+###########################################################
+## v1.6
+
+
+## prompt ##
+
+
+¿Quieres que arme el bloque corto en README_PROMPTS.md para futuras fases, o prefieres probar el flujo manual primero?
+
+No, actualiza prompts_listos que es donde se guarda todo eso, no toques readme_prompts, y aparte, sugiereme qué hacer ahora
+
+
+## resp cursor ##
+
+
+`PROMPTS_LISTOS.md` actualizado con la Fase 11 (prompts 12–17 marcados como hechos) y plantillas para Fase 12+ (prompts 18–22). `README_PROMPTS.md` no se tocó.
+
+---
+
+## Qué hacer ahora (orden recomendado)
+
+### 1. Prueba manual en tu teléfono (30 min) — lo más urgente
+
+Tienes `flutter run --release` activo. Valida el flujo real:
+
+1. `python scripts/migrate_message_status.py` (si no lo corriste en tu BD de dev)
+2. API con `REALTIME_ENABLED=true`
+3. Login → cliente escribe al bot → mensaje **al instante** en la lista/chat
+4. Respondes desde la app → cliente recibe por WhatsApp
+5. Pedido de prueba → barra Aprobar/Rechazar sin refrescar
+
+Si algo falla, anota qué pantalla y si ves el icono de nube (WS caído).
+
+### 2. Firebase push (si quieres app cerrada/background)
+
+Usa **Prompt 19** de `PROMPTS_LISTOS.md`. Sin Firebase, el sistema ya funciona con WS + notificaciones locales; push real es el único hueco de paridad con WhatsApp con app muerta.
+
+### 3. Producción estable
+
+Usa **Prompt 18** cuando quieras dejar de depender de ngrok en el PC:
+- Railway/Render + PostgreSQL
+- `API_PUBLIC_URL` HTTPS fija
+- Webhook Twilio apuntando ahí
+- `api_config.dart` con esa URL
+
+### 4. Segundo negocio o cliente real
+
+**Prompt 21** — `onboard_business.py` + nuevo número Twilio.
+
+### 5. Solo si escalas a varias instancias API
+
+**Prompt 20** (Redis) — no hace falta con un solo servidor.
+
+---
+
+## Mi sugerencia concreta
+
+**Hoy:** prueba manual (paso 1). Es lo que confirma que los 29 tests automatizados se traducen en experiencia real en tu red/ngrok.
+
+**Esta semana:** Firebase (paso 2) o deploy estable (paso 3), según lo que más te duela: ¿app cerrada sin avisos? → Firebase. ¿API se cae al apagar el PC? → deploy.
+
+¿Quieres que te guíe paso a paso la prueba manual (qué mirar en logs si el WS no conecta) o el setup Firebase?
+
+
+
+
+###########################################################
+## v1.7
 
 
 
