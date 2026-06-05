@@ -69,8 +69,10 @@ class _ChatScreenState extends State<ChatScreen> {
         .watchMessages(widget.conversation.id)
         .listen((messages) {
       if (!mounted) return;
-      setState(() => _displayMessages = messages);
-      _onMessagesUpdated(messages);
+      setState(
+        () => _displayMessages = _reconcileMessagesFromStore(messages),
+      );
+      _onMessagesUpdated(_displayMessages);
     });
     SchedulerBinding.instance.scheduleFrameCallback((_) {
       unawaited(_markRead());
@@ -122,13 +124,38 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _mergeIncomingMessage(ChatMessage message) {
-    final index = _displayMessages.indexWhere((m) => m.id == message.id);
+    var index = _displayMessages.indexWhere((m) => m.id == message.id);
+    if (index < 0 &&
+        message.clientUuid != null &&
+        message.clientUuid!.isNotEmpty) {
+      index = _displayMessages.indexWhere(
+        (m) => m.clientUuid == message.clientUuid,
+      );
+    }
     if (index >= 0) {
       _displayMessages[index] = message;
     } else {
       _displayMessages = [..._displayMessages, message]
         ..sort(ChatMessage.compareChronological);
     }
+  }
+
+  /// SQLite puede emitir vacío un instante al reemplazar id temporal → id servidor.
+  List<ChatMessage> _reconcileMessagesFromStore(List<ChatMessage> store) {
+    final merged = List<ChatMessage>.from(store);
+    for (final local in _displayMessages) {
+      if (local.id >= 0) continue;
+      final exists = store.any(
+        (m) =>
+            m.id == local.id ||
+            (local.clientUuid != null &&
+                local.clientUuid!.isNotEmpty &&
+                m.clientUuid == local.clientUuid),
+      );
+      if (!exists) merged.add(local);
+    }
+    merged.sort(ChatMessage.compareChronological);
+    return merged;
   }
 
   Future<void> _fetchMissingMessagesIfNeeded({Conversation? conversation}) async {
@@ -168,7 +195,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
 
     final count = messages.length;
-    final hadGrowth = count > _lastMessageCount && _lastMessageCount > 0;
+    final hadGrowth = count > _lastMessageCount;
     _lastMessageCount = count;
 
     if (messages.isNotEmpty) {
@@ -339,12 +366,27 @@ class _ChatScreenState extends State<ChatScreen> {
       isTyping: false,
     );
     try {
-      final result = await _messageRepo.sendMessage(
+      final sendFuture = _messageRepo.sendMessage(
         conversationId: widget.conversation.id,
         customerWaId: widget.conversation.customerWaId,
         body: text,
       );
+      await Future<void>.delayed(Duration.zero);
+      if (mounted) {
+        final optimistic =
+            await _messageRepo.getCachedMessages(widget.conversation.id);
+        if (mounted) {
+          setState(
+            () => _displayMessages = _reconcileMessagesFromStore(optimistic),
+          );
+          _onMessagesUpdated(_displayMessages);
+          _scrollToBottom(force: true);
+        }
+      }
+      final result = await sendFuture;
       if (!mounted) return;
+      setState(() => _mergeIncomingMessage(result.message));
+      _onMessagesUpdated(_displayMessages);
       _scrollToBottom(force: true);
       if (result.queued) {
         ScaffoldMessenger.of(context).showSnackBar(

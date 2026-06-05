@@ -607,3 +607,54 @@ F11      Tiempo real (Prompts 12–17)                         ✅
 F12+     Producción / Firebase config / Redis / negocios     → 18–22
 Utilidad Corrección o chat nuevo                             → U1, U2
 ```
+
+
+
+
+
+
+
+## prompt independiente para mejora incremental ##
+
+
+
+IMPORTANTE — Mejoras incrementales conservando integridad total
+
+Antes de realizar cualquier cambio:
+
+1. Analiza toda la funcionalidad relacionada con la tarea (flujos, pantallas, servicios, APIs, tests y configuración).
+2. Identifica dependencias y posibles efectos secundarios.
+3. Anticipa qué podría verse afectado indirectamente (otros flujos, permisos, cachés, sincronización, estados, etc.).
+4. Define el límite del cambio: solo modifica lo estrictamente necesario.
+
+Reglas de implementación:
+
+5. Cambio mínimo e incremental: usa el diff más pequeño posible.
+6. NO modifiques archivos, funciones o componentes que no estén directamente relacionados con esta tarea.
+7. Mantén intacta toda la lógica y el comportamiento existente (reglas de negocio, contratos de API, formatos de datos, flujos de usuario).
+8. No refactorices, renombres ni reorganices código fuera del alcance solicitado.
+9. Si necesitas cambiar algo fuera del alcance, detente y explícame primero: qué problema encontraste, por qué no se puede resolver solo dentro del alcance, y qué alternativa mínima propones.
+10. Verifica que no se rompan funcionalidades existentes (tests o validación manual).
+
+Tarea:
+[DESCRIBE AQUÍ LA MEJORA INCREMENTAL]
+
+Criterio de éxito:
+- La mejora solicitada queda implementada.
+- El resto del sistema se comporta igual que antes.
+- No hay cambios colaterales no justificados.
+
+Al finalizar, indícame exactamente:
+1. Archivos modificados.
+2. Qué cambió en cada archivo (qué se añadió, ajustó o eliminó y por qué).
+3. Qué no tocaste y por qué.
+4. Cómo verificaste que no hay regresiones.
+5. Riesgos residuales (si los hay).
+
+
+
+
+
+########################################
+
+

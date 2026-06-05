@@ -485,6 +485,19 @@ flutter test
 
 ---
 
+## Chat: mensajes enviados visibles + orden tipo WhatsApp (v1.24) ✅
+
+- `chat_screen.dart`: merge por `clientUuid` al confirmar envío; reconciliación SQLite para no perder optimistas; lectura inmediata de caché tras enviar; scroll al primer mensaje.
+- `chats_list_screen.dart`: eventos `message.new` salientes fuerzan rebuild (el bump ya lo hace `sync_engine` vía Drift).
+
+**Validar:** abrir chat → enviar → la burbuja aparece al instante y persiste; volver a la lista → ese chat arriba; mensaje entrante también sube al tope.
+
+```bash
+cd whatsbot_app && flutter test && flutter analyze
+```
+
+---
+
 ## Chat: preview al enviar + orden al recibir (v1.19) ✅
 
 - `chat_repository.dart`: `mergeWithLocal` no sobrescribe preview local si el servidor trae el mismo `lastMessageAt`; `upsertConversations` usa merge por ítem (no pisa envíos optimistas).

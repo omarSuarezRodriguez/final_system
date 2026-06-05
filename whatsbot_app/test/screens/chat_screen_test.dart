@@ -214,6 +214,29 @@ void main() {
     },
   );
 
+  testWidgets(
+    'ChatScreen reemplaza burbuja optimista por confirmada vía clientUuid (v1.24)',
+    (WidgetTester tester) async {
+      await pumpChatScreen(tester, initialMessages: const []);
+
+      await tester.enterText(find.byType(TextField), 'Envío confirmado');
+      await tester.tap(find.byIcon(Icons.send));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text('Envío confirmado'), findsOneWidget);
+      expect(
+        tester
+            .widgetList<MessageBubble>(find.byType(MessageBubble))
+            .where((b) => b.message.body == 'Envío confirmado')
+            .length,
+        1,
+      );
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
   testWidgets('ChatScreen muestra burbuja optimista al enviar sin duplicar', (
     WidgetTester tester,
   ) async {

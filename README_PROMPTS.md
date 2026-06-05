@@ -1,4 +1,4 @@
-## v1.23
+## v1.24
 
 
 
@@ -3123,9 +3123,136 @@ No toqué ningún otro archivo.
 ####################################
 ## v1.23
 
+## Prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/FLUTTER_APP.md
+@docs/INCREMENTAL_GUIDE.md
+
+
+MEJORA: [
+    
+1.Cuando abro un chat desde whatsbot y envío el mensaje, no se me muestra en esa ventana donde están los chats el que acabo de enviar.
+2. Ordena el orden de los chats en el listado de chats, por ejemplo si recibe un mensaje se pone de ultimo, necesito que se ponga de primero, como whatsapp
+
+3. verifica que los cambios fueron realizados y que si fueron exitosos, verifica que si funciona como te digo
+
+]
+
+REGLAS:
+- Cambio mínimo; no tocar lógica de chatbot/gateway ni intents
+- UI solo Flutter (whatsbot_app/)
+- Si toca API: validate_system.py + pytest
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+- validate_chatbot.py al final si tocaste backend
+
+
+
+## resp cursor ##
+
+Corregidos los dos problemas en la app Flutter (solo UI, sin tocar backend/chatbot). Resumen:
+
+## Problemas y causas
+
+**1. El mensaje enviado no aparecía en la lista de chats**
+- Un sync del servidor con el mismo `lastMessageAt` podía **sobrescribir** el preview del envío optimista (`mergeWithLocal` aceptaba empates a favor del servidor).
+- `upsertConversations` hacía overwrite masivo sin merge, pisando bumps locales.
+- Al volver del chat no había refresh (el `Navigator.push` no se esperaba).
+
+**2. Los chats no subían al tope al recibir mensajes**
+- Si la conversación **no existía aún en SQLite**, `message.new` hacía sync pero **no actualizaba** `lastMessageAt` → el chat quedaba al final.
+- El bump de mensajes salientes podía fallar si el timestamp local parecía más nuevo.
+
+## Cambios (v1.19)
+
+| Archivo | Cambio |
+|---------|--------|
+| `chat_repository.dart` | Merge estricto (`isAfter`); `upsertConversations` usa merge por ítem |
+| `message_repository.dart` | Mensajes salientes siempre actualizan preview |
+| `sync_engine.dart` | `message.new` siempre hace bump (sync + merge con caché local) |
+| `chats_list_screen.dart` | `await Navigator.push` y refresh al volver del chat |
+
+## Verificación
+
+```text
+flutter test  → 31 tests passed
+flutter analyze → No issues found
+```
+
+**Prueba manual** (con `flutter run` activo):
+1. Abre un chat → envía un mensaje → vuelve atrás: el chat debe estar **arriba** con tu mensaje como preview.
+2. Recibe un mensaje de un cliente (WhatsApp): ese chat debe subir al **tope** al instante.
+
+Nota en `docs/INCREMENTAL_GUIDE.md` (sección v1.19). Si no ves los cambios, haz hot restart (`R` en la terminal de Flutter).
 
 
 
 
 
+##################################
+## v1.24
+
+Aquí tienes un prompt reutilizable, autocontenido y sin referencias a archivos `.md`:
+
+---
+
+```
+MEJORA INCREMENTAL — WhatsBot
+
+Objetivo (describe solo esto, nada más):
+[PEGA AQUÍ LA MEJORA CONCRETA — 1 a 3 puntos máximo]
+
+---
+
+REGLAS OBLIGATORIAS
+
+1. Alcance mínimo
+   - Cambia únicamente lo necesario para cumplir el objetivo.
+   - No refactorices, no renombres, no “aproveches” para limpiar código no relacionado.
+   - Si algo no está en el objetivo, no lo toques.
+
+2. Capas del sistema
+   - UI móvil → solo código Flutter en whatsbot_app/
+   - API/backend → solo si la mejora lo exige explícitamente
+   - Prohibido tocar lógica de chatbot, gateway, intents o flujos Twilio salvo que el objetivo lo pida literalmente.
+
+3. Convenciones
+   - Lee el código existente antes de escribir; imita estilo, nombres y patrones del proyecto.
+   - Reutiliza repositorios, servicios y componentes ya creados (Drift, SyncEngine, RealtimeService, etc.).
+   - Sin sobre-ingeniería: nada de abstracciones nuevas para cambios de pocas líneas.
+
+4. Validación (hazla tú, no solo describas)
+   - Flutter: flutter pub get → flutter analyze → flutter test
+   - Si tocaste API/Python: validate_system.py + pytest en lo afectado
+   - Si tocaste backend de chatbot: validate_chatbot.py al final
+   - Confirma que el comportamiento pedido funciona; si no puedes probar en dispositivo, dilo explícitamente.
+
+5. Documentación
+   - Añade una nota breve (3–6 líneas) en la guía incremental del repo: qué cambió, por qué y cómo validar.
+   - No crees documentación extensa ni archivos nuevos salvo que el objetivo lo pida.
+
+6. Git
+   - No hagas commit ni push salvo que yo lo pida.
+
+---
+
+ENTREGABLE
+
+1. Resumen corto de qué se cambió y por qué.
+2. Archivos tocados (lista).
+3. Comandos de validación ejecutados y resultado.
+4. Checklist manual (2–4 pasos) para que yo verifique en la app.
+
+Si el objetivo es ambiguo, haz una suposición razonable, implementa la mínima solución correcta y declara la suposición en una línea.
+```
+
+---
+
+Sustituye solo el bloque `[PEGA AQUÍ LA MEJORA...]`. Ejemplo:
+
+```
+Objetivo:
+1. Al enviar un mensaje desde un chat abierto, debe visualizarse el mensaje en el chat, porque los enviados a manualmente a travé´s de whatsbot no se ven, tienes que hacer que se vean.
+2. Los chats con mensaje nuevo deben quedar primero, osea el orden, como WhatsApp.
+```
 

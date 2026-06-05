@@ -65,7 +65,13 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     if (event.type != 'message.new') return;
 
     final message = event.message;
-    if (message == null || message.isOutgoing) return;
+    if (message == null) return;
+
+    // sync_engine ya persistió el bump; salientes reordenan vía Drift watch.
+    if (message.isOutgoing) {
+      if (mounted) setState(() {});
+      return;
+    }
 
     final conversation = event.conversation ??
         await _chats.getConversation(message.conversationId);
