@@ -1,3 +1,5 @@
+import 'dart:async' show TimeoutException, unawaited;
+
 import '../data/local/app_database.dart';
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
@@ -68,16 +70,15 @@ class AppServices {
     await database.clearAll();
   }
 
-  /// Login / cold start: REST hidrata caché + WS para vivo (sin polling).
+  /// Login / cold start: REST hidrata caché + WS en segundo plano (sin bloquear UI).
   static Future<void> startRealtimeSession() async {
     if (!_initialized || !apiClient.isLoggedIn) return;
 
-    // 1) Caché local desde REST (como WhatsApp al abrir la app)
+    // 1) Caché local desde REST; si falla, seguimos con SQLite
     await hydrateAfterLogin();
 
-    // 2) Socket en paralelo; si `connected` llega tarde, syncGap lo cubre
-    await realtimeService.connect();
-    await realtimeService.waitUntilConnected();
+    // 2) Socket en segundo plano — la UI no espera `connected`
+    unawaited(realtimeService.connect());
   }
 
   /// Vuelta a primer plano: reconectar WS + delta REST una vez.
@@ -89,7 +90,15 @@ class AppServices {
   /// Cola saliente + sync incremental (una vez por sesión en login).
   static Future<void> hydrateAfterLogin() async {
     if (!_initialized) return;
-    await syncEngine.syncOnReconnect();
+    try {
+      await syncEngine
+          .syncOnReconnect()
+          .timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      // API lenta o caída: mostrar caché local y reintentar al reconectar WS.
+    } catch (_) {
+      // Misma degradación: la app arranca con datos locales.
+    }
     realtimeService.markSyncCompleted();
     _hydratedThisSession = true;
   }

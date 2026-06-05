@@ -55,8 +55,12 @@ class _SplashGateState extends State<SplashGate> {
     await apiClient.loadSession();
     if (apiClient.isLoggedIn) {
       AppServices.resetSessionFlags();
-      await pushService.registerAfterLogin();
-      await AppServices.startRealtimeSession();
+      try {
+        await pushService.registerAfterLogin();
+      } catch (_) {}
+      try {
+        await AppServices.startRealtimeSession();
+      } catch (_) {}
     }
     if (!mounted) return;
     Navigator.of(context).pushReplacement(

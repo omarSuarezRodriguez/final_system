@@ -1,4 +1,4 @@
-## v1.29
+## v1.30
 
 
 
@@ -3652,6 +3652,253 @@ Si tras el restart sigue fallando, dime si el icono de nube offline se queda per
 
 
 #######################################
+## v1.30
+
+Analiza completamente la arquitectura actual del proyecto WhatsBot antes de realizar cambios.
+
+Objetivo principal:
+
+1. Twilio debe convertirse en la fuente oficial (source of truth) para mensajes y estados de conversación.
+2. La aplicación debe sincronizar automáticamente los historiales desde Twilio.
+3. El chat debe actualizarse en tiempo real cuando lleguen nuevos mensajes.
+4. Deben mostrarse correctamente los estados de entrega y lectura cuando Twilio los notifique.
+5. No romper funcionalidades existentes.
+
+Problemas actuales detectados:
+
+* El chat carga los mensajes una sola vez al abrir la conversación.
+* Cuando llegan nuevos mensajes desde Twilio, la interfaz no se actualiza automáticamente.
+* El usuario debe recargar o volver a entrar al chat para ver cambios.
+* Los estados de mensajes (enviado, entregado, leído) no permanecen sincronizados de forma confiable.
+
+Requerimientos técnicos:
+
+1. Implementar sincronización continua con Twilio.
+
+   * Utilizar webhooks oficiales de Twilio para mensajes entrantes.
+   * Utilizar webhooks de status callbacks para cambios de estado.
+   * Procesar eventos de:
+
+     * message.received
+     * message.sent
+     * message.delivered
+     * message.read
+     * cualquier evento equivalente disponible en la API actual.
+
+2. Persistencia local.
+
+   * Guardar todos los mensajes en la base de datos local.
+   * Guardar Message SID de Twilio.
+   * Evitar duplicados utilizando el SID como identificador único.
+   * Mantener consistencia entre Twilio y la base de datos local.
+
+3. Actualización en tiempo real.
+
+   * Cuando llegue un webhook de Twilio, actualizar inmediatamente la conversación abierta.
+   * Implementar el mecanismo más adecuado para tiempo real:
+
+     * WebSockets
+     * Socket.IO
+     * SSE
+     * o la solución ya utilizada por el proyecto.
+   * Evitar polling innecesario.
+
+4. Estados de mensajes.
+
+   * Mostrar correctamente:
+
+     * enviado
+     * entregado
+     * leído
+   * Actualizar automáticamente la interfaz cuando Twilio envíe cambios de estado.
+
+5. Sincronización de recuperación.
+
+   * Si el servidor estuvo apagado o se perdió algún webhook, implementar un mecanismo de resync con Twilio.
+   * Recuperar mensajes faltantes usando la API oficial.
+   * Mantener consistencia entre historial local y Twilio.
+
+6. Rendimiento.
+
+   * No recargar toda la conversación cuando llegue un mensaje.
+   * Aplicar actualizaciones incrementales.
+   * Mantener scroll estable.
+   * Comportamiento similar a WhatsApp Web.
+
+7. Experiencia de usuario.
+
+   * Los nuevos mensajes deben aparecer instantáneamente.
+   * Si el usuario está viendo la conversación, debe verla actualizarse en vivo.
+   * Si está en otra pantalla, mostrar contadores y notificaciones correspondientes.
+
+Antes de modificar código:
+
+* Revisar la arquitectura existente.
+* Detectar la causa raíz del problema.
+* Proponer la solución.
+* Implementarla siguiendo buenas prácticas.
+* Verificar que no se rompan funcionalidades existentes.
+* Ejecutar una revisión final completa para asegurar que todo el flujo de mensajes funciona correctamente de extremo a extremo.
+
+
+
+## resp cursor ##
+
+# Análisis de arquitectura WhatsBot
+
+## Arquitectura actual (antes de los cambios)
+
+```mermaid
+flowchart TB
+    subgraph twilio [Twilio]
+        IN[Mensaje entrante]
+        OUT[REST send]
+        CB[Status callbacks]
+    end
+
+    subgraph backend [FastAPI Backend]
+        WH["POST /webhook"]
+        ST["POST /webhook/status ❌ no existía"]
+        DB[(PostgreSQL/SQLite)]
+        WS["WS /whatsbot/ws"]
+        REST["REST /whatsbot/*"]
+    end
+
+    subgraph flutter [Flutter App]
+        SQLITE[(SQLite Drift)]
+        CHAT[ChatScreen]
+    end
+
+    IN --> WH --> DB
+    WH --> WS
+    OUT -.->|SID descartado| X[perdido]
+    CB -.-> X
+    REST --> DB
+    WS --> SQLITE --> CHAT
+    REST --> SQLITE
+```
+
+| Capa | Componente | Rol |
+|------|-----------|-----|
+| **Twilio** | `POST /webhook` | Mensajes entrantes → BD |
+| **Backend** | `conversation_service.py` | Persistencia, dedup por `client_id` |
+| **Backend** | `realtime_service.py` | Hub WebSocket in-memory por `business_id` |
+| **Backend** | `whatsbot.py` | REST para Flutter (mensajes, mark-read) |
+| **Flutter** | `RealtimeService` → `SyncEngine` → Drift | Local-first, WS sin polling |
+| **Flutter** | `ChatScreen` | `watchMessages()` reactivo, sin polling activo |
+
+### Lo que ya funcionaba bien
+
+- Webhook entrante → BD → `message.new` por WebSocket (testeado en `test_realtime_ws.py`)
+- Sync incremental REST (`after_id`, `since`)
+- Cola saliente offline + mensajes optimistas
+- Arquitectura local-first tipo WhatsApp Web
+
+---
+
+## Causa raíz del problema “el chat carga una sola vez”
+
+No es que falte la infraestructura de tiempo real: **el diseño depende 100% del WebSocket mientras el chat está abierto** y no hay red de seguridad activa.
+
+| Factor | Impacto |
+|--------|---------|
+| **Sin polling en chat abierto** | Si WS cae, la UI queda congelada |
+| **TTL de 2 min en sync REST** | `_refresh(silent: true)` puede omitir la API |
+| **`shouldSyncOnConnect` post-login** | Tras hidratar, reconectar WS no dispara sync REST |
+| **Estados simulados localmente** | `emit_message_saved()` marcaba `delivered` sin Twilio |
+| **SID no guardado en salientes** | Imposible correlacionar callbacks de Twilio |
+| **FCM no persiste mensajes** | Solo alerta sonora, no actualiza burbujas |
+
+El síntoma encaja con **WS desconectado + ausencia de fallback**, no con un bug de renderizado en la UI.
+
+---
+
+## Solución implementada
+
+### 1. Twilio como fuente de verdad (backend)
+
+| Cambio | Archivo |
+|--------|---------|
+| `send_whatsapp_message()` devuelve **MessageSid** | `infrastructure/twilio_client.py` |
+| Status callback URL en envíos REST | `admin_service.py` + `config/settings.py` |
+| **`POST /webhook/status`** — procesa `sent/delivered/read/failed` | `api/routes/whatsapp.py` |
+| Dedup entrantes por **MessageSid** | `conversation_service.py` |
+| `apply_twilio_status()` — mapeo Twilio → local | `conversation_service.py` |
+| SID guardado en mensajes del dueño | `api/routes/whatsbot.py` |
+| No auto-`delivered` si hay `twilio_sid` | `realtime_service.py` |
+| **`POST /whatsbot/sync/twilio`** — resync vía API Twilio | `services/twilio_sync_service.py` |
+| `twilio_sid` en API/WS | `api/schemas.py`, `realtime_service.py` |
+
+### 2. Tiempo real robusto (Flutter)
+
+| Cambio | Archivo |
+|--------|---------|
+| Fallback sync cada **30 s** si WS cae | `chat_screen.dart` |
+| Sync forzado al abrir chat sin WS | `chat_screen.dart` |
+| Timestamps `delivered_at`/`read_at` en eventos WS | `realtime_event.dart`, `sync_engine.dart` |
+
+### 3. Tests
+
+- 12 tests backend pasando (`test_twilio_status.py`, `test_realtime_ws.py`, `test_message_status.py`)
+- 19 tests Flutter pasando (sync + chat)
+
+---
+
+## Flujo objetivo (después)
+
+```
+Twilio webhook/status → BD (dedup SID) → WebSocket message.new/status
+                                              ↓
+                                    Flutter SQLite → Drift watch → UI
+
+Si WS cae → fallback REST incremental cada 30s (solo chat abierto)
+Si webhooks perdidos → POST /whatsbot/sync/twilio
+```
+
+---
+
+## Configuración requerida en producción
+
+1. **`API_PUBLIC_URL`** debe ser URL pública HTTPS (ngrok o dominio real). Sin esto, Twilio no envía status callbacks.
+
+2. En Twilio Console, el webhook de mensajes debe apuntar a **FastAPI** `POST /webhook`, no al Flask legacy.
+
+3. **`REALTIME_ENABLED=true`** en `.env`.
+
+4. **`wsBaseUrl`** en la app debe ser alcanzable (`wss://...`).
+
+5. Tras caída prolongada del servidor, llamar:
+   ```
+   POST /whatsbot/sync/twilio?lookback_hours=48
+   ```
+
+---
+
+## Limitaciones conocidas (sin romper lo existente)
+
+| Limitación | Notas |
+|------------|-------|
+| Hub WS **in-memory** | Multi-worker requiere Redis pub/sub (futuro) |
+| Respuestas bot vía **TwiML** | Aún sin SID en BD (Twilio responde inline) |
+| Read receipts del cliente | Twilio WhatsApp los expone limitadamente; mark-read del dueño sigue funcionando |
+| FCM foreground | Sigue sin persistir; el fallback REST compensa en chat abierto |
+
+---
+
+## Verificación manual recomendada
+
+1. Confirmar WS conectado (sin icono de nube en app bar).
+2. Enviar mensaje de prueba desde WhatsApp → debe aparecer en vivo sin reabrir chat.
+3. Enviar desde la app → ticks: `sent` → `delivered` (callback Twilio).
+4. Simular WS caído (modo avión breve) → mensajes deben llegar vía fallback REST en ~30 s.
+5. Revisar logs del servidor: `WS connected business=...` y `Twilio status sid=...`.
+
+¿Quieres que configure también el resync automático al reconectar WS desde Flutter, o Redis pub/sub para despliegue multi-instancia?
+
+
+
+
+###########################################################
 
 
 

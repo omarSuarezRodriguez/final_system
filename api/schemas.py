@@ -118,6 +118,7 @@ class MessageOut(BaseModel):
     read_at: datetime | None = None
     created_at: datetime
     client_id: str | None = None
+    twilio_sid: str | None = None
 
     model_config = {"from_attributes": True}
 

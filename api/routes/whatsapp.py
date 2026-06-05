@@ -26,8 +26,12 @@ from config.settings import REALTIME_ENABLED, RESTAURANT_NAME, use_rest_webhook_
 from infrastructure.database import get_db
 from infrastructure.twilio_client import build_twiml_response, deliver_reply
 from services.business_service import resolve_business_id_for_webhook
-from services.conversation_service import save_incoming_message, save_outgoing_message
-from services.realtime_service import emit_message_saved
+from services.conversation_service import (
+    apply_twilio_status,
+    save_incoming_message,
+    save_outgoing_message,
+)
+from services.realtime_service import emit_message_saved, emit_message_status
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +152,60 @@ async def twilio_whatsapp_webhook(
     )
 
     return Response(content=twiml, media_type="text/xml; charset=utf-8")
+
+
+@router.post("/webhook/status")
+async def twilio_status_callback(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    """
+    Twilio status callback (sent, delivered, read, failed).
+
+    Form fields: MessageSid, MessageStatus, To, From, ...
+    """
+    form = _form_dict(await request.form())
+    message_sid = form.get("MessageSid") or form.get("SmsMessageSid") or ""
+    twilio_status = form.get("MessageStatus") or form.get("SmsStatus") or ""
+    to_number = form.get("To", "")
+    from_number = form.get("From", "")
+
+    if not message_sid or not twilio_status:
+        return Response(status_code=204)
+
+    business_id = resolve_business_id_for_webhook(
+        db,
+        to_number=to_number,
+        from_number=from_number,
+    )
+
+    try:
+        msg = apply_twilio_status(
+            db,
+            business_id=business_id,
+            message_sid=message_sid,
+            twilio_status=twilio_status,
+        )
+        if msg is None:
+            logger.debug(
+                "Status callback for unknown sid=%s status=%s",
+                message_sid,
+                twilio_status,
+            )
+            return Response(status_code=204)
+
+        db.commit()
+        if REALTIME_ENABLED:
+            await emit_message_status(db, business_id, msg)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to apply Twilio status sid=%s status=%s",
+            message_sid,
+            twilio_status,
+        )
+
+    return Response(status_code=204)
 
 
 @router.get("/webhook/health")

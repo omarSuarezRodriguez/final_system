@@ -98,6 +98,14 @@ def is_twilio_whatsapp_sandbox() -> bool:
     return sandbox_digits in from_digits or from_digits.endswith(sandbox_digits)
 
 
+def twilio_status_callback_url() -> str | None:
+    """URL pública para status callbacks de Twilio (MessageSid → sent/delivered/read)."""
+    base = API_PUBLIC_URL.rstrip("/")
+    if not base or base.startswith("http://127.0.0.1"):
+        return None
+    return f"{base}/webhook/status"
+
+
 def use_rest_webhook_replies() -> bool:
     explicit = TWILIO_REST_WEBHOOK_REPLIES.lower()
     if explicit in {"0", "false", "no", "off"}:

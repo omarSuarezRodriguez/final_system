@@ -44,6 +44,7 @@ from api.schemas import (
     PromptsConfigUpdate,
 )
 from chatbot.runtime import get_bot_context
+from config.settings import REALTIME_ENABLED
 from infrastructure.database import get_db
 from infrastructure.twilio_client import send_whatsapp_message
 from services import business_service as biz_svc
@@ -53,6 +54,7 @@ from services import notification_service as notify_svc
 from services import order_service as order_svc
 from services import device_token_service as token_svc
 from services import sheets_sync_service as sheets_svc
+from services import twilio_sync_service as twilio_sync_svc
 from services.realtime_service import (
     emit_message_saved,
     emit_message_status,
@@ -159,7 +161,7 @@ async def send_owner_message(
             return existing
     ctx = get_bot_context(start_background=False)
     wa_id = ctx.admin_service.canonical_wa_id(body.customer_wa_id, "") or body.customer_wa_id
-    send_whatsapp_message(wa_id, body.body)
+    twilio_sid = send_whatsapp_message(wa_id, body.body)
     saved = conv_svc.save_outgoing_message(
         db,
         customer_wa_id=wa_id,
@@ -167,6 +169,7 @@ async def send_owner_message(
         business_id=business_id,
         is_admin=True,
         client_id=body.client_id,
+        twilio_sid=twilio_sid,
     )
     db.commit()
     if not saved:
@@ -174,6 +177,33 @@ async def send_owner_message(
     msg = saved[-1]
     await emit_message_saved(db, business_id, msg)
     return msg
+
+
+@router.post("/sync/twilio")
+async def sync_twilio_messages(
+    business_id: BusinessId,
+    lookback_hours: int = Query(default=48, ge=1, le=168),
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """
+    Recupera mensajes faltantes desde Twilio API (dedup por MessageSid).
+    Útil tras caída del servidor o webhooks perdidos.
+    """
+    _require_business(db, business_id)
+    result = twilio_sync_svc.sync_messages_from_twilio(
+        db,
+        business_id,
+        lookback_hours=lookback_hours,
+    )
+    imported = int(result.get("imported", 0))
+    if imported > 0 and REALTIME_ENABLED:
+        from services.realtime_service import realtime_hub, build_conversation_updated_event
+        from services import conversation_service as conv_svc
+
+        convs = conv_svc.list_conversations(db, business_id, limit=50)
+        for conv in convs:
+            await realtime_hub.emit(business_id, build_conversation_updated_event(conv))
+    return result
 
 
 @router.post("/device-token", status_code=204)

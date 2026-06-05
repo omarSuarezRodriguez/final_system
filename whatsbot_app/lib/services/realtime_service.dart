@@ -127,14 +127,10 @@ class RealtimeService {
     _intentionalDisconnect = true;
     _stopKeepAlive();
     _reconnectTimer?.cancel();
-    _connectedCompleter?.completeError(StateError('disconnected'));
-    _connectedCompleter = null;
+    _releaseConnectedCompleter();
     await _subscription?.cancel();
     _subscription = null;
-    try {
-      await _channel?.sink.close(ws_status.goingAway);
-    } catch (_) {}
-    _channel = null;
+    await _safeCloseChannel();
     _connecting = false;
     _setConnected(false);
   }
@@ -167,10 +163,7 @@ class RealtimeService {
 
     await _subscription?.cancel();
     _subscription = null;
-    try {
-      await _channel?.sink.close(ws_status.goingAway);
-    } catch (_) {}
-    _channel = null;
+    await _safeCloseChannel();
     _setConnected(false);
 
     try {
@@ -262,15 +255,28 @@ class RealtimeService {
     _ackTimeoutTimer?.cancel();
     _connecting = false;
     _setConnected(false);
-    _connectedCompleter?.completeError(StateError('reconnecting'));
-    _connectedCompleter = null;
+    _releaseConnectedCompleter();
     _subscription?.cancel();
     _subscription = null;
-    try {
-      _channel?.sink.close(ws_status.goingAway);
-    } catch (_) {}
-    _channel = null;
+    unawaited(_safeCloseChannel());
     _scheduleReconnect();
+  }
+
+  void _releaseConnectedCompleter() {
+    final completer = _connectedCompleter;
+    _connectedCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
+    }
+  }
+
+  Future<void> _safeCloseChannel() async {
+    final channel = _channel;
+    _channel = null;
+    if (channel == null) return;
+    try {
+      await channel.sink.close(ws_status.normalClosure);
+    } catch (_) {}
   }
 
   void _scheduleReconnect() {

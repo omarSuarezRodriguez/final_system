@@ -12,6 +12,8 @@ class RealtimeEvent {
     this.messageId,
     this.conversationId,
     this.status,
+    this.deliveredAt,
+    this.readAt,
   });
 
   final String type;
@@ -21,6 +23,8 @@ class RealtimeEvent {
   final int? messageId;
   final int? conversationId;
   final String? status;
+  final DateTime? deliveredAt;
+  final DateTime? readAt;
 
   factory RealtimeEvent.fromJson(Map<String, dynamic> json) {
     final msg = json['message'];
@@ -40,7 +44,14 @@ class RealtimeEvent {
       messageId: _asInt(json['message_id']),
       conversationId: _asInt(json['conversation_id']),
       status: json['status'] as String?,
+      deliveredAt: _parseDate(json['delivered_at']),
+      readAt: _parseDate(json['read_at']),
     );
+  }
+
+  static DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    return DateTime.parse(value as String);
   }
 
   static int? _asInt(dynamic value) {

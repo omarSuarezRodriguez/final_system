@@ -81,6 +81,19 @@ def save_incoming_message(
     twilio_sid: str | None = None,
 ) -> Message:
     """Store client (or admin) message received via Twilio webhook."""
+    if twilio_sid:
+        existing = get_message_by_twilio_sid(
+            db,
+            business_id or DEFAULT_BUSINESS_ID,
+            twilio_sid,
+        )
+        if existing is not None:
+            logger.info(
+                "Duplicate incoming webhook ignored sid=%s msg_id=%s",
+                twilio_sid,
+                existing.id,
+            )
+            return existing
     conv = get_or_create_conversation(
         db,
         customer_wa_id=customer_wa_id,
@@ -113,6 +126,27 @@ def save_incoming_message(
         is_admin,
     )
     return msg
+
+
+def get_message_by_twilio_sid(
+    db: Session,
+    business_id: str,
+    twilio_sid: str,
+) -> Message | None:
+    """Idempotencia webhook Twilio: reutilizar mensaje ya guardado por MessageSid."""
+    bid = _normalize_business_id(business_id)
+    sid = (twilio_sid or "").strip()
+    if not sid:
+        return None
+    return (
+        db.query(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .filter(
+            Conversation.business_id == bid,
+            Message.twilio_sid == sid,
+        )
+        .one_or_none()
+    )
 
 
 def get_message_by_client_id(
@@ -241,9 +275,66 @@ def list_messages(
     return q.order_by(Message.created_at.asc(), Message.id.asc()).limit(limit).all()
 
 
+_STATUS_RANK = {"sending": 0, "sent": 1, "delivered": 2, "read": 3, "failed": -1}
+
+
+def _twilio_status_to_local(twilio_status: str) -> str | None:
+    """Map Twilio MessageStatus to local status string."""
+    raw = (twilio_status or "").strip().lower()
+    mapping = {
+        "queued": "sent",
+        "sending": "sent",
+        "sent": "sent",
+        "delivered": "delivered",
+        "read": "read",
+        "failed": "failed",
+        "undelivered": "failed",
+    }
+    return mapping.get(raw)
+
+
+def apply_twilio_status(
+    db: Session,
+    *,
+    business_id: str,
+    message_sid: str,
+    twilio_status: str,
+) -> Message | None:
+    """Update message status from Twilio status callback (source of truth)."""
+    msg = get_message_by_twilio_sid(db, business_id, message_sid)
+    if msg is None:
+        return None
+
+    local_status = _twilio_status_to_local(twilio_status)
+    if local_status is None:
+        return msg
+
+    current_rank = _STATUS_RANK.get(msg.status, 0)
+    new_rank = _STATUS_RANK.get(local_status, 0)
+    if local_status != "failed" and new_rank <= current_rank:
+        return msg
+
+    now = datetime.now(timezone.utc)
+    msg.status = local_status
+    if local_status in {"delivered", "read"} and msg.delivered_at is None:
+        msg.delivered_at = now
+    if local_status == "read":
+        msg.read_at = now
+    db.flush()
+    logger.info(
+        "Twilio status sid=%s → %s (msg_id=%s)",
+        message_sid,
+        local_status,
+        msg.id,
+    )
+    return msg
+
+
 def mark_outgoing_delivered(db: Session, msg: Message) -> Message:
-    """Owner/bot outgoing: sent → delivered (guardado y emitido)."""
+    """Owner/bot outgoing: sent → delivered when no Twilio SID to track."""
     if msg.direction != "outgoing" or msg.status in {"delivered", "read"}:
+        return msg
+    if msg.twilio_sid:
         return msg
     now = datetime.now(timezone.utc)
     msg.status = "delivered"

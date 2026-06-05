@@ -40,14 +40,14 @@ def build_twiml_response(reply: Reply) -> str:
     return str(response)
 
 
-def send_whatsapp_message(to_number: str, body: str) -> bool:
+def send_whatsapp_message(to_number: str, body: str) -> str | None:
     """
     Send via Twilio REST API.
-    to_number: wa_id digits or whatsapp:+E164 (normalized by AdminService in webhook).
+    Returns MessageSid on success, None on failure.
     """
     if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM):
         logger.info("Twilio outbound not configured; skip send to %s", to_number[:20])
-        return False
+        return None
     if is_twilio_whatsapp_sandbox():
         logger.warning(
             "TWILIO_WHATSAPP_FROM looks like sandbox; production should use Business number."
@@ -59,7 +59,7 @@ def send_whatsapp_message(to_number: str, body: str) -> bool:
         return admin._send_whatsapp(to_number, body)
     except Exception:
         logger.exception("send_whatsapp_message failed for %s", to_number)
-        return False
+        return None
 
 
 def deliver_reply(

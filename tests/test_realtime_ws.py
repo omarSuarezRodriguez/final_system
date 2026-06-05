@@ -24,34 +24,25 @@ os.environ["WHATSBOT_OWNER_PIN"] = "testpin"
 os.environ["REALTIME_ENABLED"] = "true"
 
 
-def _ensure_messages_client_id_column() -> None:
-    """SQLite de test puede existir sin migración OF-C (client_id)."""
-    from sqlalchemy import inspect, text
+def _fresh_test_database() -> None:
+    """Stale SQLite test files skip new columns; recreate from current models."""
+    import infrastructure.database as db_mod
 
-    from infrastructure.database import get_engine
-
-    engine = get_engine()
-    cols = {c["name"] for c in inspect(engine).get_columns("messages")}
-    if "client_id" in cols:
-        return
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE messages ADD COLUMN client_id VARCHAR(64)"))
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_messages_client_id "
-                "ON messages (client_id) WHERE client_id IS NOT NULL"
-            )
-        )
+    test_db = ROOT / "data" / "test_realtime_ws.db"
+    if test_db.exists():
+        test_db.unlink()
+    db_mod._engine = None
+    db_mod._SessionLocal = None
+    db_mod.init_db()
 
 
 @pytest.fixture(scope="module")
 def client():
-    from infrastructure.database import init_db, session_scope
+    from infrastructure.database import session_scope
     from api.main import create_app
     from services.business_service import ensure_default_business
 
-    init_db()
-    _ensure_messages_client_id_column()
+    _fresh_test_database()
     with session_scope() as db:
         ensure_default_business(db)
     app = create_app()

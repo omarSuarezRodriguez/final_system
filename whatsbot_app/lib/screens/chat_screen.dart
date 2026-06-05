@@ -45,7 +45,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
+  StreamSubscription<bool>? _connectionSub;
   StreamSubscription<List<ChatMessage>>? _messagesSub;
+  Timer? _wsFallbackTimer;
 
   MessageRepository get _messageRepo => AppServices.messageRepository;
   ChatRepository get _chats => AppServices.chatRepository;
@@ -64,6 +66,15 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       if (online) unawaited(AppServices.onAppResumed());
     });
+    _connectionSub = realtimeService.connectionState.listen((connected) {
+      if (!mounted) return;
+      setState(() {});
+      _updateWsFallbackTimer(connected);
+      if (!connected && connectivityService.isOnline) {
+        unawaited(_refresh(silent: true, force: true));
+      }
+    });
+    _updateWsFallbackTimer(realtimeService.isConnected);
     _messagesSub = _messageRepo
         .watchMessages(widget.conversation.id)
         .listen((messages) {
@@ -92,7 +103,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputController.removeListener(_onInputChanged);
     _realtimeSub?.cancel();
     _connectivitySub?.cancel();
+    _connectionSub?.cancel();
     _messagesSub?.cancel();
+    _wsFallbackTimer?.cancel();
     _typingStopTimer?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
@@ -266,7 +279,17 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _refresh({bool silent = false}) async {
+  void _updateWsFallbackTimer(bool wsConnected) {
+    _wsFallbackTimer?.cancel();
+    _wsFallbackTimer = null;
+    if (wsConnected || !connectivityService.isOnline) return;
+    _wsFallbackTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!mounted || realtimeService.isConnected) return;
+      unawaited(_refresh(silent: true, force: true));
+    });
+  }
+
+  Future<void> _refresh({bool silent = false, bool force = false}) async {
     if (!connectivityService.isOnline) {
       if (!silent && mounted) setState(() => _refreshing = false);
       return;
@@ -282,6 +305,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await AppServices.syncEngine.syncMessagesIncremental(
         widget.conversation.id,
+        force: force || !realtimeService.isConnected,
       );
       if (!silent && _pendingOrder == null) {
         await _loadPendingOrderOnce();

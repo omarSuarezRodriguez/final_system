@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -37,6 +38,16 @@ class ApiClient {
   static const _tokenKey = 'whatsbot_access_token';
   static const _businessIdKey = 'whatsbot_business_id';
   static const _businessNameKey = 'whatsbot_business_name';
+  static const Duration _requestTimeout = Duration(seconds: 12);
+
+  Future<T> _withTimeout<T>(Future<T> future) {
+    return future.timeout(
+      _requestTimeout,
+      onTimeout: () => throw ApiException(
+        'Sin respuesta del servidor. Revisa la conexión o la URL de la API.',
+      ),
+    );
+  }
 
   bool get isLoggedIn => _token != null && _token!.isNotEmpty;
 
@@ -80,10 +91,12 @@ class ApiClient {
   }
 
   Future<LoginResult> login(String businessIdInput, String pin) async {
-    final response = await _http.post(
-      _uri('/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'business_id': businessIdInput, 'pin': pin}),
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'business_id': businessIdInput, 'pin': pin}),
+      ),
     );
     if (response.statusCode == 200) {
       final result = LoginResult.fromJson(
@@ -99,9 +112,11 @@ class ApiClient {
     final query = since != null
         ? {'since': since.toUtc().toIso8601String()}
         : null;
-    final response = await _http.get(
-      _uri('/whatsbot/conversations', query),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/conversations', query),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final list = jsonDecode(response.body) as List<dynamic>;
@@ -111,9 +126,11 @@ class ApiClient {
   }
 
   Future<void> markConversationRead(int conversationId) async {
-    final response = await _http.post(
-      _uri('/whatsbot/conversations/$conversationId/mark-read'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/whatsbot/conversations/$conversationId/mark-read'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response, expected: {204, 200});
   }
@@ -124,9 +141,11 @@ class ApiClient {
   }) async {
     final query =
         afterId != null ? {'after_id': afterId.toString()} : null;
-    final response = await _http.get(
-      _uri('/whatsbot/conversations/$conversationId/messages', query),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/conversations/$conversationId/messages', query),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final list = jsonDecode(response.body) as List<dynamic>;
@@ -147,10 +166,12 @@ class ApiClient {
     if (clientId != null && clientId.isNotEmpty) {
       payload['client_id'] = clientId;
     }
-    final response = await _http.post(
-      _uri('/whatsbot/messages'),
-      headers: _authHeaders,
-      body: jsonEncode(payload),
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/whatsbot/messages'),
+        headers: _authHeaders,
+        body: jsonEncode(payload),
+      ),
     );
     _ensureOk(response, expected: {201, 200});
     return ChatMessage.fromJson(
@@ -159,9 +180,11 @@ class ApiClient {
   }
 
   Future<List<PendingOrder>> getPendingOrders() async {
-    final response = await _http.get(
-      _uri('/whatsbot/orders/pending'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/orders/pending'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final list = jsonDecode(response.body) as List<dynamic>;
@@ -171,9 +194,11 @@ class ApiClient {
   }
 
   Future<String> approveOrder(String orderId) async {
-    final response = await _http.post(
-      _uri('/whatsbot/orders/$orderId/approve'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/whatsbot/orders/$orderId/approve'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -190,10 +215,12 @@ class ApiClient {
     required String token,
     required String platform,
   }) async {
-    final response = await _http.post(
-      _uri('/whatsbot/device-token'),
-      headers: _authHeaders,
-      body: jsonEncode({'token': token, 'platform': platform}),
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/whatsbot/device-token'),
+        headers: _authHeaders,
+        body: jsonEncode({'token': token, 'platform': platform}),
+      ),
     );
     _ensureOk(response, expected: {204, 200});
   }
@@ -205,15 +232,17 @@ class ApiClient {
     final request = http.Request('DELETE', _uri('/whatsbot/device-token'));
     request.headers.addAll(_authHeaders);
     request.body = jsonEncode({'token': token, 'platform': platform});
-    final streamed = await _http.send(request);
-    final response = await http.Response.fromStream(streamed);
+    final streamed = await _withTimeout(_http.send(request));
+    final response = await _withTimeout(http.Response.fromStream(streamed));
     _ensureOk(response, expected: {204, 200});
   }
 
   Future<String> rejectOrder(String orderId, {String reason = ''}) async {
-    final response = await _http.post(
-      _uri('/whatsbot/orders/$orderId/reject', {'reason': reason}),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.post(
+        _uri('/whatsbot/orders/$orderId/reject', {'reason': reason}),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -221,9 +250,11 @@ class ApiClient {
   }
 
   Future<BusinessProfile> getBusinessMe() async {
-    final response = await _http.get(
-      _uri('/whatsbot/business/me'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/business/me'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     return BusinessProfile.fromJson(
@@ -232,9 +263,11 @@ class ApiClient {
   }
 
   Future<List<MenuItemModel>> getMenu() async {
-    final response = await _http.get(
-      _uri('/whatsbot/business/menu'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/business/menu'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -245,12 +278,14 @@ class ApiClient {
   }
 
   Future<List<MenuItemModel>> saveMenu(List<MenuItemModel> items) async {
-    final response = await _http.put(
-      _uri('/whatsbot/business/menu'),
-      headers: _authHeaders,
-      body: jsonEncode({
-        'items': items.map((i) => i.toApiJson()).toList(),
-      }),
+    final response = await _withTimeout(
+      _http.put(
+        _uri('/whatsbot/business/menu'),
+        headers: _authHeaders,
+        body: jsonEncode({
+          'items': items.map((i) => i.toApiJson()).toList(),
+        }),
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -261,9 +296,11 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getIntents() async {
-    final response = await _http.get(
-      _uri('/whatsbot/business/intents'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/business/intents'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -271,10 +308,12 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> saveIntents(Map<String, dynamic> config) async {
-    final response = await _http.put(
-      _uri('/whatsbot/business/intents'),
-      headers: _authHeaders,
-      body: jsonEncode({'config': config}),
+    final response = await _withTimeout(
+      _http.put(
+        _uri('/whatsbot/business/intents'),
+        headers: _authHeaders,
+        body: jsonEncode({'config': config}),
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -282,9 +321,11 @@ class ApiClient {
   }
 
   Future<Map<String, String>> getPrompts() async {
-    final response = await _http.get(
-      _uri('/whatsbot/business/prompts'),
-      headers: _authHeaders,
+    final response = await _withTimeout(
+      _http.get(
+        _uri('/whatsbot/business/prompts'),
+        headers: _authHeaders,
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -293,10 +334,12 @@ class ApiClient {
   }
 
   Future<Map<String, String>> savePrompts(Map<String, String> config) async {
-    final response = await _http.put(
-      _uri('/whatsbot/business/prompts'),
-      headers: _authHeaders,
-      body: jsonEncode({'config': config}),
+    final response = await _withTimeout(
+      _http.put(
+        _uri('/whatsbot/business/prompts'),
+        headers: _authHeaders,
+        body: jsonEncode({'config': config}),
+      ),
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;

@@ -269,11 +269,11 @@ class AdminService:
         }
         return hints.get(code, "Ver Twilio Console → Monitor → Logs.")
 
-    def _send_whatsapp(self, to_number: str, body: str) -> bool:
+    def _send_whatsapp(self, to_number: str, body: str) -> str | None:
         self._last_twilio_error_code = None
         if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_FROM):
             logger.info("Twilio outbound not configured. Admin message: %s", body[:120])
-            return False
+            return None
         if is_twilio_whatsapp_sandbox():
             logger.warning(
                 "TWILIO_WHATSAPP_FROM es el sandbox %s. Para producción use su número "
@@ -288,14 +288,24 @@ class AdminService:
                 to_number,
                 to_digits or "(vacío)",
             )
-            return False
+            return None
         try:
             from twilio.rest import Client
+
+            from config.settings import twilio_status_callback_url
 
             client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
             to = f"whatsapp:+{to_digits}"
             from_ = self._format_whatsapp_address(TWILIO_WHATSAPP_FROM)
-            message = client.messages.create(body=body, from_=from_, to=to)
+            create_kwargs: dict[str, str] = {
+                "body": body,
+                "from_": from_,
+                "to": to,
+            }
+            status_url = twilio_status_callback_url()
+            if status_url:
+                create_kwargs["status_callback"] = status_url
+            message = client.messages.create(**create_kwargs)
             # Twilio may accept the API call but mark the message failed afterward.
             if message.sid:
                 message = client.messages(message.sid).fetch()
@@ -312,14 +322,14 @@ class AdminService:
                     error_code,
                     hint,
                 )
-                return False
+                return None
             logger.info(
                 "WhatsApp entregado a %s (sid=%s, status=%s)",
                 to,
                 message.sid,
                 status,
             )
-            return True
+            return message.sid or None
         except Exception as exc:
             code = getattr(exc, "code", None)
             if code:
@@ -332,7 +342,7 @@ class AdminService:
                 exc,
                 hint,
             )
-            return False
+            return None
 
     def _send_whatsapp_async(self, to_number: str, body: str) -> None:
         thread = threading.Thread(
