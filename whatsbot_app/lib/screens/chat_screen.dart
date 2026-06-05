@@ -2,12 +2,15 @@ import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
 
-import '../config/api_config.dart';
+import '../data/repositories/chat_repository.dart';
+import '../data/repositories/message_repository.dart';
+import '../di/app_services.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import '../models/order.dart';
 import '../models/realtime_event.dart';
 import '../services/api_client.dart';
+import '../services/connectivity_service.dart';
 import '../services/message_alerts_service.dart';
 import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
@@ -27,70 +30,78 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
-  List<ChatMessage> _messages = [];
   PendingOrder? _pendingOrder;
-  bool _loading = true;
+  bool _refreshing = false;
   bool _sending = false;
   bool _orderBusy = false;
   bool _peerTyping = false;
   bool _didInitialScroll = false;
-  Timer? _fallbackTimer;
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
-  StreamSubscription<bool>? _connectionSub;
+  StreamSubscription<bool>? _connectivitySub;
+
+  MessageRepository get _messages => AppServices.messageRepository;
+  ChatRepository get _chats => AppServices.chatRepository;
 
   @override
   void initState() {
     super.initState();
+    AppServices.syncEngine.trackOpenConversation(widget.conversation.id);
     messageAlerts.setActiveConversation(widget.conversation.id);
     _inputController.addListener(_onInputChanged);
     _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
-    _connectionSub = realtimeService.connectionState.listen((_) {
-      _configureFallbackTimer();
+    _connectivitySub = connectivityService.onlineState.listen((online) {
+      if (!mounted) return;
+      setState(() {});
+      if (online) unawaited(_refresh(silent: true));
     });
-    _refresh();
-    _configureFallbackTimer();
+    unawaited(_refresh(silent: true));
     unawaited(_markRead());
   }
 
   @override
   void dispose() {
+    AppServices.syncEngine.untrackOpenConversation(widget.conversation.id);
     realtimeService.sendTyping(
       conversationId: widget.conversation.id,
       isTyping: false,
     );
-    _markConversationSeenLocally();
+    unawaited(_markConversationSeenOnExit());
     messageAlerts.setActiveConversation(null);
     _inputController.removeListener(_onInputChanged);
     _realtimeSub?.cancel();
-    _connectionSub?.cancel();
-    _fallbackTimer?.cancel();
+    _connectivitySub?.cancel();
     _typingStopTimer?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  DateTime? _latestActivityAt() {
-    if (_messages.isNotEmpty) {
-      return _messages
+  DateTime? _latestActivityAt(List<ChatMessage> messages) {
+    if (messages.isNotEmpty) {
+      return messages
           .map((m) => m.createdAt)
           .reduce((a, b) => a.isAfter(b) ? a : b);
     }
     return widget.conversation.lastMessageAt;
   }
 
-  void _markConversationSeenLocally() {
-    final lastAt = _latestActivityAt();
-    if (lastAt != null) {
-      messageAlerts.markConversationSeen(widget.conversation.id, at: lastAt);
-    }
+  Future<void> _markConversationSeenOnExit() async {
+    final messages =
+        await _messages.watchMessages(widget.conversation.id).first;
+    await _persistSeen(messages);
+  }
+
+  Future<void> _persistSeen(List<ChatMessage> messages) async {
+    final lastAt = _latestActivityAt(messages);
+    if (lastAt == null) return;
+    messageAlerts.markConversationSeen(widget.conversation.id, at: lastAt);
+    await _chats.markSeen(widget.conversation.id, lastAt);
   }
 
   Future<void> _markRead() async {
     try {
       await apiClient.markConversationRead(widget.conversation.id);
-      _markConversationSeenLocally();
     } catch (_) {}
   }
 
@@ -112,17 +123,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _configureFallbackTimer() {
-    _fallbackTimer?.cancel();
-    if (realtimeService.isConnected) return;
-    _fallbackTimer = Timer.periodic(ApiConfig.fallbackPollInterval, (_) {
-      if (!realtimeService.isConnected) {
-        _refresh(silent: true);
-      }
-    });
-  }
-
-  void _onRealtimeEvent(RealtimeEvent event) {
+  Future<void> _onRealtimeEvent(RealtimeEvent event) async {
     if (!mounted) return;
 
     switch (event.type) {
@@ -132,28 +133,18 @@ class _ChatScreenState extends State<ChatScreen> {
             message.conversationId != widget.conversation.id) {
           return;
         }
-        _appendMessage(message);
-        unawaited(
-          messageAlerts.handleChatMessages(
-            conversationId: widget.conversation.id,
-            displayName: widget.conversation.displayName,
-            messages: _messages,
-          ),
-        );
         unawaited(_markRead());
-      case 'message.status':
-        final messageId = event.messageId;
-        if (messageId == null ||
-            event.conversationId != widget.conversation.id) {
-          return;
-        }
-        final index = _messages.indexWhere((item) => item.id == messageId);
-        if (index < 0) return;
-        setState(() {
-          _messages[index] = _messages[index].copyWith(
-            status: event.status ?? _messages[index].status,
+        final allMessages =
+            await _messages.watchMessages(widget.conversation.id).first;
+        if (allMessages.isNotEmpty) {
+          unawaited(
+            messageAlerts.handleChatMessages(
+              conversationId: widget.conversation.id,
+              displayName: widget.conversation.displayName,
+              messages: allMessages,
+            ),
           );
-        });
+        }
       case 'order.pending':
         final order = event.order;
         if (order != null && _sameWa(order.waId, widget.conversation.customerWaId)) {
@@ -179,55 +170,34 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _appendMessage(ChatMessage message) {
-    if (_messages.any((item) => item.id == message.id)) return;
-    setState(() {
-      _messages = [..._messages, message];
-      _loading = false;
-    });
-    _markConversationSeenLocally();
-    _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
-  }
-
   Future<void> _refresh({bool silent = false}) async {
-    if (!silent) setState(() => _loading = true);
+    if (!connectivityService.isOnline) {
+      if (!silent && mounted) setState(() => _refreshing = false);
+      return;
+    }
+    if (!silent) setState(() => _refreshing = true);
     try {
-      final afterId = _messages.isEmpty
-          ? null
-          : _messages.map((m) => m.id).reduce((a, b) => a > b ? a : b);
-      final incremental = afterId != null && silent && _messages.isNotEmpty;
-      final messages = incremental
-          ? await apiClient.getMessages(
-              widget.conversation.id,
-              afterId: afterId,
-            )
-          : await apiClient.getMessages(widget.conversation.id);
+      await AppServices.syncEngine.syncMessagesIncremental(
+        widget.conversation.id,
+      );
       if (!silent && _pendingOrder == null) {
         await _loadPendingOrderOnce();
       }
       if (!mounted) return;
-      setState(() {
-        if (incremental && messages.isNotEmpty) {
-          final known = _messages.map((m) => m.id).toSet();
-          _messages = [
-            ..._messages,
-            ...messages.where((m) => !known.contains(m.id)),
-          ];
-        } else if (!incremental) {
-          _messages = messages;
-        }
-        _loading = false;
-      });
-      await messageAlerts.handleChatMessages(
-        conversationId: widget.conversation.id,
-        displayName: widget.conversation.displayName,
-        messages: _messages,
-      );
-      _markConversationSeenLocally();
+      setState(() => _refreshing = false);
+      final allMessages =
+          await _messages.watchMessages(widget.conversation.id).first;
+      if (allMessages.isNotEmpty) {
+        await messageAlerts.handleChatMessages(
+          conversationId: widget.conversation.id,
+          displayName: widget.conversation.displayName,
+          messages: allMessages,
+        );
+      }
       _scrollToBottom(force: !silent || !_didInitialScroll);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      setState(() => _refreshing = false);
     }
   }
 
@@ -284,17 +254,21 @@ class _ChatScreenState extends State<ChatScreen> {
       isTyping: false,
     );
     try {
-      final msg = await apiClient.sendMessage(
+      final result = await _messages.sendMessage(
+        conversationId: widget.conversation.id,
         customerWaId: widget.conversation.customerWaId,
         body: text,
       );
       if (!mounted) return;
-      _appendMessage(msg);
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
+      if (result.queued) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sin conexión. El mensaje se enviará automáticamente.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -359,91 +333,106 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
       ),
-      body: Column(
-        children: [
-          if (_pendingOrder != null)
-            OrderActionsBar(
-              order: _pendingOrder!,
-              busy: _orderBusy,
-              onApprove: _approveOrder,
-              onReject: _rejectOrder,
-            ),
-          Expanded(
-            child: Container(
-              color: WhatsAppTheme.chatBackground,
-              child: _loading && _messages.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: _messages.length + (_peerTyping ? 1 : 0),
-                      itemBuilder: (_, i) {
-                        if (_peerTyping && i == _messages.length) {
-                          return const TypingIndicator();
-                        }
-                        return MessageBubble(message: _messages[i]);
-                      },
-                    ),
-            ),
-          ),
-          Material(
-            color: const Color(0xFFF0F0F0),
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _inputController,
-                        decoration: InputDecoration(
-                          hintText: 'Mensaje',
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 10,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            borderSide: BorderSide.none,
-                          ),
+      body: StreamBuilder<List<ChatMessage>>(
+        stream: _messages.watchMessages(widget.conversation.id),
+        builder: (context, snapshot) {
+          final messages = snapshot.data ?? [];
+          final showSpinner = messages.isEmpty && _refreshing;
+
+          if (snapshot.hasData && messages.isNotEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(_persistSeen(messages));
+              _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
+            });
+          }
+
+          return Column(
+            children: [
+              if (_pendingOrder != null)
+                OrderActionsBar(
+                  order: _pendingOrder!,
+                  busy: _orderBusy,
+                  onApprove: _approveOrder,
+                  onReject: _rejectOrder,
+                ),
+              Expanded(
+                child: Container(
+                  color: WhatsAppTheme.chatBackground,
+                  child: showSpinner
+                      ? const Center(child: CircularProgressIndicator())
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          itemCount: messages.length + (_peerTyping ? 1 : 0),
+                          itemBuilder: (_, i) {
+                            if (_peerTyping && i == messages.length) {
+                              return const TypingIndicator();
+                            }
+                            return MessageBubble(message: messages[i]);
+                          },
                         ),
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        maxLines: 4,
-                        minLines: 1,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Material(
-                      color: WhatsAppTheme.accentGreen,
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _sending ? null : _send,
-                        child: SizedBox(
-                          width: 48,
-                          height: 48,
-                          child: _sending
-                              ? const Padding(
-                                  padding: EdgeInsets.all(12),
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.send, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ),
-            ),
-          ),
-        ],
+              Material(
+                color: const Color(0xFFF0F0F0),
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _inputController,
+                            decoration: InputDecoration(
+                              hintText: 'Mensaje',
+                              filled: true,
+                              fillColor: Colors.white,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(24),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: (_) => _send(),
+                            maxLines: 4,
+                            minLines: 1,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Material(
+                          color: WhatsAppTheme.accentGreen,
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _sending ? null : _send,
+                            child: SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: _sending
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(12),
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.send, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

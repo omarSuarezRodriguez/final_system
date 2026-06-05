@@ -117,6 +117,7 @@ class MessageOut(BaseModel):
     delivered_at: datetime | None = None
     read_at: datetime | None = None
     created_at: datetime
+    client_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -124,6 +125,7 @@ class MessageOut(BaseModel):
 class OwnerMessageCreate(BaseModel):
     customer_wa_id: str = Field(..., min_length=8)
     body: str = Field(..., min_length=1)
+    client_id: str | None = Field(default=None, max_length=64)
 
 
 class DeviceTokenRegister(BaseModel):

@@ -9,9 +9,6 @@ class ApiConfig {
   static const String apiBaseUrl =
       'https://snowman-shower-pellet.ngrok-free.dev';
 
-  /// Fallback REST si el WebSocket no está conectado (reconexión).
-  static const Duration fallbackPollInterval = Duration(seconds: 30);
-
   /// URL WebSocket derivada de [apiBaseUrl].
   static String get wsBaseUrl {
     final base = apiBaseUrl;

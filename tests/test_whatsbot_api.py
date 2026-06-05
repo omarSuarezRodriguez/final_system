@@ -159,6 +159,33 @@ def test_gateway_uses_db_menu_and_prompts(client: TestClient, auth_headers: dict
     assert "Sopa Gateway BD" in text or "sopa gateway" in text.lower()
 
 
+def test_send_message_client_id_idempotent(client: TestClient, auth_headers: dict):
+    """OF-C: reintento con mismo client_id no reenvía Twilio ni duplica fila."""
+    import uuid
+
+    import scripts.migrate_client_id as migrate_client_id
+    import scripts.migrate_message_status as migrate_message_status
+
+    migrate_message_status.main()
+    migrate_client_id.main()
+
+    client_id = f"offline-{uuid.uuid4().hex[:12]}"
+    payload = {
+        "customer_wa_id": "573009991234",
+        "body": "Mensaje idempotente",
+        "client_id": client_id,
+    }
+    with patch("api.routes.whatsbot.send_whatsapp_message", return_value=True) as mock_send:
+        r1 = client.post("/whatsbot/messages", headers=auth_headers, json=payload)
+        r2 = client.post("/whatsbot/messages", headers=auth_headers, json=payload)
+
+    assert r1.status_code == 201, r1.text
+    assert r2.status_code == 201, r2.text
+    assert r1.json()["id"] == r2.json()["id"]
+    assert r1.json()["client_id"] == client_id
+    assert mock_send.call_count == 1
+
+
 def test_put_prompts_persist(client: TestClient, auth_headers: dict):
     r = client.put(
         "/whatsbot/business/prompts",

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../di/app_services.dart';
 import '../models/conversation.dart';
 import '../models/message.dart';
 import 'api_client.dart';
@@ -41,7 +42,8 @@ class MessageAlertsService {
     if (_activeConversationId == conversation.id && _appInForeground) {
       return false;
     }
-    final seenAt = _lastSeenAtByConversation[conversation.id];
+    final seenAt =
+        conversation.lastSeenAt ?? _lastSeenAtByConversation[conversation.id];
     if (seenAt == null) return true;
     return lastAt.isAfter(seenAt);
   }
@@ -102,7 +104,11 @@ class MessageAlertsService {
   }
 
   void markConversationSeen(int conversationId, {DateTime? at}) {
-    _lastSeenAtByConversation[conversationId] = at ?? DateTime.now();
+    final when = at ?? DateTime.now();
+    _lastSeenAtByConversation[conversationId] = when;
+    if (AppServices.isInitialized) {
+      unawaited(AppServices.chatRepository.markSeen(conversationId, when));
+    }
   }
 
   Future<void> notifyFromPush({
@@ -199,7 +205,10 @@ class MessageAlertsService {
     if (!_seeded) {
       for (final conv in conversations) {
         _lastMessageAtByConversation[conv.id] = conv.lastMessageAt;
-        markConversationSeen(conv.id, at: conv.lastMessageAt);
+        markConversationSeen(
+          conv.id,
+          at: conv.lastSeenAt ?? conv.lastMessageAt,
+        );
       }
       _seeded = true;
       return;

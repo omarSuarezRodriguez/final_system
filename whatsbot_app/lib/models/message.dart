@@ -1,3 +1,7 @@
+import 'package:drift/drift.dart' show Value;
+
+import '../data/local/app_database.dart';
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -11,6 +15,7 @@ class ChatMessage {
     this.deliveredAt,
     this.readAt,
     required this.createdAt,
+    this.clientUuid,
   });
 
   final int id;
@@ -24,6 +29,7 @@ class ChatMessage {
   final DateTime? deliveredAt;
   final DateTime? readAt;
   final DateTime createdAt;
+  final String? clientUuid;
 
   bool get isOutgoing => direction == 'outgoing' || isAdmin;
 
@@ -44,6 +50,7 @@ class ChatMessage {
       deliveredAt: deliveredAt ?? this.deliveredAt,
       readAt: readAt ?? this.readAt,
       createdAt: createdAt,
+      clientUuid: clientUuid,
     );
   }
 
@@ -60,6 +67,42 @@ class ChatMessage {
       deliveredAt: _parseDate(json['delivered_at']),
       readAt: _parseDate(json['read_at']),
       createdAt: DateTime.parse(json['created_at'] as String),
+      clientUuid: json['client_id'] as String?,
+    );
+  }
+
+  factory ChatMessage.fromLocalRow(MessageEntity row) {
+    return ChatMessage(
+      id: row.id,
+      conversationId: row.conversationId,
+      direction: row.direction,
+      body: row.body,
+      waId: row.waId,
+      isAdmin: row.isAdmin,
+      channel: row.channel,
+      status: row.status,
+      deliveredAt: row.deliveredAt,
+      readAt: row.readAt,
+      createdAt: row.createdAt,
+      clientUuid: row.clientUuid,
+    );
+  }
+
+  MessagesCompanion toLocalRow() {
+    return MessagesCompanion(
+      id: Value(id),
+      conversationId: Value(conversationId),
+      direction: Value(direction),
+      body: Value(body),
+      waId: Value(waId),
+      isAdmin: Value(isAdmin),
+      channel: Value(channel),
+      status: Value(status),
+      deliveredAt: Value(deliveredAt),
+      readAt: Value(readAt),
+      createdAt: Value(createdAt),
+      clientUuid:
+          clientUuid == null ? const Value.absent() : Value(clientUuid),
     );
   }
 

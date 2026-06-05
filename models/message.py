@@ -29,6 +29,9 @@ class Message(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     channel: Mapped[str] = mapped_column(String(32), default="whatsapp", nullable=False)
     twilio_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
     status: Mapped[str] = mapped_column(
         String(16), default="delivered", nullable=False
     )  # sending | sent | delivered | read

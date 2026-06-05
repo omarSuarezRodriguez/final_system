@@ -1,4 +1,4 @@
-## v1.11
+## v1.12
 
 
 
@@ -1318,6 +1318,608 @@ Nota documentada en `docs/INCREMENTAL_GUIDE.md`. Para probar en el dispositivo c
 
 ## prompt ##
 
+Lee este prompt:
+
+[
+
+
+Analiza toda la arquitectura actual del sistema de chat y propón una mejora profesional estilo WhatsApp para soportar funcionamiento offline-first.
+
+Objetivo:
+
+- Los chats deben permanecer visibles aunque el usuario pierda internet.
+- Los mensajes deben almacenarse localmente en el dispositivo.
+- Al abrir un chat NO debe depender de una petición HTTP para mostrar mensajes.
+- La interfaz debe cargar instantáneamente desde almacenamiento local.
+- Cuando vuelva la conexión, el sistema debe sincronizar automáticamente cambios pendientes.
+- Evitar polling constante o recargas repetitivas.
+- Diseñar una arquitectura eficiente y escalable.
+
+Quiero que evalúes:
+
+1. Cómo se almacenan actualmente los mensajes.
+2. Si existe persistencia local o todo depende del backend.
+3. Si conviene usar SQLite, Hive o Isar para cache local.
+4. Cómo implementar sincronización incremental.
+5. Cómo implementar cola de mensajes salientes cuando no hay internet.
+6. Cómo manejar mensajes pendientes, enviados, entregados y leídos.
+7. Cómo detectar reconexión automáticamente.
+8. Cómo integrar WebSockets para recibir mensajes en tiempo real.
+9. Cómo evitar duplicados durante sincronización.
+10. Cómo mantener consistencia entre backend y almacenamiento local.
+
+Entrega:
+
+- Diagnóstico actual.
+- Problemas encontrados.
+- Arquitectura propuesta.
+- Flujo de sincronización.
+- Cambios concretos a realizar.
+- Archivos específicos a modificar.
+- Plan de implementación incremental por fases.
+
+IMPORTANTE:
+
+No hagas cambios todavía.
+
+Primero analiza el código completo existente y genera un informe técnico detallado indicando exactamente qué debe modificarse para lograr una experiencia similar a WhatsApp donde:
+
+- Los chats abren instantáneamente.
+- Funcionan sin internet.
+- Se sincronizan automáticamente al reconectarse.
+- Los nuevos mensajes aparecen en tiempo real.
+- No existe polling innecesario.
+- El consumo de batería y red sea mínimo.
+
+Además indica si la arquitectura actual está preparada para WebSockets o si requiere refactorización previa.
+
+
+]
+
+
+No hagas nada, solo reescribe este prompt, mejoralo, enfocado en este proyecto
 
 
 
+## resp cursor ##
+
+Aquí tienes el prompt reescrito y adaptado a **WhatsBot / `final_system`**:
+
+---
+
+## Prompt: Arquitectura offline-first para WhatsBot App
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/ARCHITECTURE.md
+
+CONTEXTO DEL PROYECTO
+
+Sistema SaaS WhatsBot en `final_system/`:
+- Backend: FastAPI (`api/routes/whatsbot.py`, `services/conversation_service.py`, `services/realtime_service.py`)
+- Bot/gateway: `chatbot/gateway.py` — NO tocar lógica de intents ni flujos
+- App móvil Flutter: `whatsbot_app/` (Android/iOS, UI tipo WhatsApp)
+- Persistencia servidor: PostgreSQL/SQLite vía SQLAlchemy (`models/conversation.py`, `models/message.py`)
+- Tiempo real: WebSocket `/whatsbot/ws` (Fase 11) + FCM opcional
+- Sync REST incremental ya disponible:
+  - `GET /whatsbot/conversations?since=`
+  - `GET /whatsbot/conversations/{id}/messages?after_id=`
+  - `POST /whatsbot/conversations/{id}/mark-read`
+- Estado actual Flutter:
+  - Sin base de datos local (solo `shared_preferences` para JWT/sesión)
+  - `chats_list_screen.dart` y `chat_screen.dart` cargan TODO vía HTTP al abrir
+  - `realtime_service.dart` conecta WS tras login; si falla, polling cada 30s (`ApiConfig.fallbackPollInterval`)
+  - `message_alerts_service.dart` gestiona leído/no leído solo en memoria (se pierde al reiniciar)
+
+OBJETIVO
+
+Diseñar una arquitectura offline-first profesional (experiencia tipo WhatsApp) para `whatsbot_app/`, sin implementar todavía.
+
+Comportamiento deseado:
+- Los chats permanecen visibles sin internet
+- Los mensajes se guardan localmente en el dispositivo
+- Al abrir un chat, la UI carga al instante desde almacenamiento local (sin esperar HTTP)
+- Al reconectar, sincronización automática e incremental de cambios pendientes
+- Cola de mensajes salientes offline con reintento
+- Tiempo real vía WebSocket cuando hay conexión; sin polling innecesario
+- Mínimo consumo de batería y datos
+
+TAREA (SOLO ANÁLISIS — NO IMPLEMENTAR)
+
+Analiza el código existente de `whatsbot_app/` y el backend de mensajería, y entrega un informe técnico detallado.
+
+EVALUAR OBLIGATORIAMENTE
+
+1. **Almacenamiento actual**
+   - Cómo fluyen hoy conversaciones y mensajes (`api_client.dart`, pantallas, modelos)
+   - Qué se persiste localmente vs. qué depende 100% del backend
+
+2. **Brechas offline**
+   - Qué falla hoy sin internet (lista de chats, historial, envío, pedidos, ticks de estado, notificaciones)
+   - Dónde existe polling redundante o recargas completas innecesarias
+
+3. **Elección de almacenamiento local**
+   - Comparar SQLite (drift/sqflite), Hive e Isar para este proyecto
+   - Recomendar una opción justificada (volumen de datos, relaciones, queries, migraciones, rendimiento en Android gama media)
+
+4. **Capa de datos local (propuesta)**
+   - Esquema local: conversaciones, mensajes, cola de salientes, cursor de sync, estados
+   - Repositorio único que unifique: local + API + WebSocket
+   - Cómo las pantallas dejan de llamar HTTP directamente
+
+5. **Sincronización incremental**
+   - Aprovechar `since` y `after_id` ya existentes en la API
+   - Estrategia pull al reconectar (conversaciones + mensajes por chat)
+   - Cómo integrar eventos WS (`message.new`, `message.status`, `conversation.updated`, `order.pending/updated`) con el store local
+
+6. **Cola de mensajes salientes offline**
+   - Mensajes del dueño (`POST /whatsbot/messages`, `is_admin=true`)
+   - Confirmación/rechazo de pedidos offline (si aplica o se difiere)
+   - IDs temporales locales, estados `pending → sent → delivered → read`, reintentos y backoff
+
+7. **Estados de mensaje y leído/no leído**
+   - Cómo alinear ticks locales con `message.status` del servidor
+   - Cómo persistir `lastSeenAt` / unread sin perder estado al reiniciar la app
+   - Relación con `message_alerts_service.dart` actual
+
+8. **Detección de conectividad y reconexión**
+   - Evaluar `connectivity_plus` u otra estrategia
+   - Cómo coordinar: red disponible + WS conectado + sync REST
+   - Cuándo reemplazar el polling de 30s y cuándo mantenerlo como último recurso
+
+9. **WebSockets**
+   - Si la arquitectura actual (`realtime_service.dart`) está lista o requiere refactor previa
+   - Cómo evitar duplicados al mezclar eventos WS + sync REST + cola local
+   - Clave de deduplicación (`server id`, `client temp id`, `twilio_sid` si aplica)
+
+10. **Consistencia local ↔ backend**
+    - Resolución de conflictos (mensaje editado, orden de timestamps, mensajes fuera de orden)
+    - Límites de retención local (ej. últimos N mensajes por chat)
+    - Multi-dispositivo: mismo `business_id`, varios tokens FCM
+
+11. **Alcance y restricciones del proyecto**
+    - Cambios SOLO en `whatsbot_app/` salvo gaps reales en la API
+    - NO modificar `chatbot/gateway.py`, intents ni flujos del bot
+    - Si propones cambios en API: indicar endpoints mínimos, tests (`pytest`) y `validate_system.py`
+    - Mantener compatibilidad con Fase 11 (WS + FCM + ticks)
+
+ENTREGABLES DEL INFORME
+
+1. **Diagnóstico actual** — mapa de archivos y flujos reales
+2. **Problemas encontrados** — priorizados (crítico / alto / medio)
+3. **Arquitectura propuesta** — diagrama de capas (UI → Repository → Local DB → Sync Engine → API/WS)
+4. **Flujo de sincronización** — secuencia: abrir app, abrir chat, enviar offline, reconectar, recibir WS
+5. **Cambios concretos** — lista exacta de archivos a crear/modificar en `whatsbot_app/`
+6. **Plan incremental por fases** — alineado con `docs/INCREMENTAL_GUIDE.md`:
+   - Fase A: cache local + carga instantánea
+   - Fase B: sync incremental + deduplicación
+   - Fase C: cola saliente offline
+   - Fase D: eliminar polling / optimizar batería
+   - Fase E: pruebas (`flutter test`, escenarios offline manual)
+7. **Riesgos y decisiones abiertas** — qué requiere validación antes de codificar
+
+CRITERIOS DE ÉXITO (para validar el diseño)
+
+- Abrir chat: UI visible en <100ms desde disco local
+- Sin internet: lista de chats + historial cacheado siguen funcionando
+- Con internet: nuevos mensajes por WS sin recargar pantalla
+- Tras reconectar: sync automático sin duplicados visibles
+- Sin polling periódico salvo fallback extremo documentado
+- `flutter analyze` limpio; sin regresiones en login, pedidos ni notificaciones
+
+REGLAS
+
+- NO escribir código todavía
+- NO modificar archivos del repositorio
+- Ser específico con rutas (`whatsbot_app/lib/...`, `api/routes/whatsbot.py`, etc.)
+- Priorizar cambio mínimo y reutilizar API/WS existentes antes de pedir cambios de backend
+- Incluir estimación de complejidad por fase (S/M/L)
+```
+
+---
+
+**Qué mejora respecto al original**
+
+- Ancla el análisis en rutas y fases reales del repo (`whatsbot_app/`, Fase 11, endpoints existentes).
+- Describe el estado actual conocido (sin DB local, polling 30s, unread en memoria).
+- Delimita qué no tocar (gateway/intents) según las reglas del proyecto.
+- Pide entregables accionables: archivos concretos, fases incrementales y criterios medibles.
+- Integra explícitamente WS, FCM, ticks y cola offline como partes del mismo diseño.
+
+
+
+
+
+
+
+## segundo prompt ##
+
+
+Aquí tienes el prompt reescrito y adaptado a **WhatsBot / `final_system`**:
+
+---
+
+## Prompt: Arquitectura offline-first para WhatsBot App
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/ARCHITECTURE.md
+
+CONTEXTO DEL PROYECTO
+
+Sistema SaaS WhatsBot en `final_system/`:
+- Backend: FastAPI (`api/routes/whatsbot.py`, `services/conversation_service.py`, `services/realtime_service.py`)
+- Bot/gateway: `chatbot/gateway.py` — NO tocar lógica de intents ni flujos
+- App móvil Flutter: `whatsbot_app/` (Android/iOS, UI tipo WhatsApp)
+- Persistencia servidor: PostgreSQL/SQLite vía SQLAlchemy (`models/conversation.py`, `models/message.py`)
+- Tiempo real: WebSocket `/whatsbot/ws` (Fase 11) + FCM opcional
+- Sync REST incremental ya disponible:
+  - `GET /whatsbot/conversations?since=`
+  - `GET /whatsbot/conversations/{id}/messages?after_id=`
+  - `POST /whatsbot/conversations/{id}/mark-read`
+- Estado actual Flutter:
+  - Sin base de datos local (solo `shared_preferences` para JWT/sesión)
+  - `chats_list_screen.dart` y `chat_screen.dart` cargan TODO vía HTTP al abrir
+  - `realtime_service.dart` conecta WS tras login; si falla, polling cada 30s (`ApiConfig.fallbackPollInterval`)
+  - `message_alerts_service.dart` gestiona leído/no leído solo en memoria (se pierde al reiniciar)
+
+OBJETIVO
+
+Diseñar una arquitectura offline-first profesional (experiencia tipo WhatsApp) para `whatsbot_app/`, sin implementar todavía.
+
+Comportamiento deseado:
+- Los chats permanecen visibles sin internet
+- Los mensajes se guardan localmente en el dispositivo
+- Al abrir un chat, la UI carga al instante desde almacenamiento local (sin esperar HTTP)
+- Al reconectar, sincronización automática e incremental de cambios pendientes
+- Cola de mensajes salientes offline con reintento
+- Tiempo real vía WebSocket cuando hay conexión; sin polling innecesario
+- Mínimo consumo de batería y datos
+
+TAREA (SOLO ANÁLISIS — NO IMPLEMENTAR)
+
+Analiza el código existente de `whatsbot_app/` y el backend de mensajería, y entrega un informe técnico detallado.
+
+EVALUAR OBLIGATORIAMENTE
+
+1. **Almacenamiento actual**
+   - Cómo fluyen hoy conversaciones y mensajes (`api_client.dart`, pantallas, modelos)
+   - Qué se persiste localmente vs. qué depende 100% del backend
+
+2. **Brechas offline**
+   - Qué falla hoy sin internet (lista de chats, historial, envío, pedidos, ticks de estado, notificaciones)
+   - Dónde existe polling redundante o recargas completas innecesarias
+
+3. **Elección de almacenamiento local**
+   - Comparar SQLite (drift/sqflite), Hive e Isar para este proyecto
+   - Recomendar una opción justificada (volumen de datos, relaciones, queries, migraciones, rendimiento en Android gama media)
+
+4. **Capa de datos local (propuesta)**
+   - Esquema local: conversaciones, mensajes, cola de salientes, cursor de sync, estados
+   - Repositorio único que unifique: local + API + WebSocket
+   - Cómo las pantallas dejan de llamar HTTP directamente
+
+5. **Sincronización incremental**
+   - Aprovechar `since` y `after_id` ya existentes en la API
+   - Estrategia pull al reconectar (conversaciones + mensajes por chat)
+   - Cómo integrar eventos WS (`message.new`, `message.status`, `conversation.updated`, `order.pending/updated`) con el store local
+
+6. **Cola de mensajes salientes offline**
+   - Mensajes del dueño (`POST /whatsbot/messages`, `is_admin=true`)
+   - Confirmación/rechazo de pedidos offline (si aplica o se difiere)
+   - IDs temporales locales, estados `pending → sent → delivered → read`, reintentos y backoff
+
+7. **Estados de mensaje y leído/no leído**
+   - Cómo alinear ticks locales con `message.status` del servidor
+   - Cómo persistir `lastSeenAt` / unread sin perder estado al reiniciar la app
+   - Relación con `message_alerts_service.dart` actual
+
+8. **Detección de conectividad y reconexión**
+   - Evaluar `connectivity_plus` u otra estrategia
+   - Cómo coordinar: red disponible + WS conectado + sync REST
+   - Cuándo reemplazar el polling de 30s y cuándo mantenerlo como último recurso
+
+9. **WebSockets**
+   - Si la arquitectura actual (`realtime_service.dart`) está lista o requiere refactor previa
+   - Cómo evitar duplicados al mezclar eventos WS + sync REST + cola local
+   - Clave de deduplicación (`server id`, `client temp id`, `twilio_sid` si aplica)
+
+10. **Consistencia local ↔ backend**
+    - Resolución de conflictos (mensaje editado, orden de timestamps, mensajes fuera de orden)
+    - Límites de retención local (ej. últimos N mensajes por chat)
+    - Multi-dispositivo: mismo `business_id`, varios tokens FCM
+
+11. **Alcance y restricciones del proyecto**
+    - Cambios SOLO en `whatsbot_app/` salvo gaps reales en la API
+    - NO modificar `chatbot/gateway.py`, intents ni flujos del bot
+    - Si propones cambios en API: indicar endpoints mínimos, tests (`pytest`) y `validate_system.py`
+    - Mantener compatibilidad con Fase 11 (WS + FCM + ticks)
+
+ENTREGABLES DEL INFORME
+
+1. **Diagnóstico actual** — mapa de archivos y flujos reales
+2. **Problemas encontrados** — priorizados (crítico / alto / medio)
+3. **Arquitectura propuesta** — diagrama de capas (UI → Repository → Local DB → Sync Engine → API/WS)
+4. **Flujo de sincronización** — secuencia: abrir app, abrir chat, enviar offline, reconectar, recibir WS
+5. **Cambios concretos** — lista exacta de archivos a crear/modificar en `whatsbot_app/`
+6. **Plan incremental por fases** — alineado con `docs/INCREMENTAL_GUIDE.md`:
+   - Fase A: cache local + carga instantánea
+   - Fase B: sync incremental + deduplicación
+   - Fase C: cola saliente offline
+   - Fase D: eliminar polling / optimizar batería
+   - Fase E: pruebas (`flutter test`, escenarios offline manual)
+7. **Riesgos y decisiones abiertas** — qué requiere validación antes de codificar
+
+CRITERIOS DE ÉXITO (para validar el diseño)
+
+- Abrir chat: UI visible en <100ms desde disco local
+- Sin internet: lista de chats + historial cacheado siguen funcionando
+- Con internet: nuevos mensajes por WS sin recargar pantalla
+- Tras reconectar: sync automático sin duplicados visibles
+- Sin polling periódico salvo fallback extremo documentado
+- `flutter analyze` limpio; sin regresiones en login, pedidos ni notificaciones
+
+REGLAS
+
+- NO escribir código todavía
+- NO modificar archivos del repositorio
+- Ser específico con rutas (`whatsbot_app/lib/...`, `api/routes/whatsbot.py`, etc.)
+- Priorizar cambio mínimo y reutilizar API/WS existentes antes de pedir cambios de backend
+- Incluir estimación de complejidad por fase (S/M/L)
+```
+
+---
+
+**Qué mejora respecto al original**
+
+- Ancla el análisis en rutas y fases reales del repo (`whatsbot_app/`, Fase 11, endpoints existentes).
+- Describe el estado actual conocido (sin DB local, polling 30s, unread en memoria).
+- Delimita qué no tocar (gateway/intents) según las reglas del proyecto.
+- Pide entregables accionables: archivos concretos, fases incrementales y criterios medibles.
+- Integra explícitamente WS, FCM, ticks y cola offline como partes del mismo diseño.
+
+
+
+
+## resp cursor ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/ARCHITECTURE.md
+@docs/FLUTTER_APP.md
+
+# WhatsBot — Offline-first (prompt maestro único)
+
+## Reglas globales (todas las fases)
+
+- Ejecuta **UNA sola fase por turno**. Al terminar cada fase: validación + pregunta explícita. **NO avances** sin mi "Sí".
+- Cambios en **`whatsbot_app/`** salvo gap API mínimo en Fase C (idempotencia opcional).
+- **NO tocar:** `chatbot/gateway.py`, intents, flujos del bot.
+- **Decisión de diseño ya tomada:** Drift (SQLite) como almacenamiento local.
+- **Prerequisito:** Fase 11 cerrada (WS + FCM + ticks + sync REST `since`/`after_id`).
+- Tras cada fase implementada: `flutter analyze` limpio; no romper login, pedidos, push, ticks.
+- Al iniciar el chat: lee el código actual y determina en qué fase estamos (A–E) antes de codificar.
+
+## Estado actual conocido
+
+- Solo `shared_preferences` para JWT (sin DB local de chats/mensajes).
+- `chats_list_screen.dart` / `chat_screen.dart` cargan vía HTTP; estado en RAM.
+- `realtime_service.dart`: WS + sync `since` al reconectar; polling 30s si WS cae.
+- `message_alerts_service.dart`: unread solo en memoria.
+
+## Índice de fases
+
+| Fase | Nombre | ¿Código? |
+|------|--------|----------|
+| OF0 | Análisis arquitectura | NO (solo informe) |
+| OF-A | Cache local + carga instantánea | SÍ |
+| OF-B | Sync incremental + WS→DB + dedup | SÍ |
+| OF-C | Cola saliente offline | SÍ |
+| OF-D | connectivity_plus + quitar polling | SÍ |
+| OF-E | Tests + docs + cierre | SÍ |
+
+**Empieza por OF0** si no hay informe previo en el chat. Si ya hicimos OF0, empieza por **OF-A**.
+
+---
+
+## FASE OF0 — Análisis (SIN código, SIN modificar archivos)
+
+Entrega informe técnico con:
+
+1. Diagnóstico: flujos actuales (`api_client`, pantallas, WS, alertas).
+2. Brechas offline priorizadas (crítico/alto/medio).
+3. Arquitectura propuesta: UI → Repository → Drift → Sync Engine → API/WS.
+4. Esquema local: conversations, messages, outbound_queue, sync_cursors, last_seen_at.
+5. Flujos: abrir app, abrir chat, enviar offline, reconectar, WS.
+6. Lista exacta de archivos a crear/modificar.
+7. Riesgos (idempotencia POST /messages, cursor `since`, retención 500 msgs/chat).
+
+**Al terminar pregunta:** "¿Procedo con OF-A (implementación)?" — PARAR.
+
+---
+
+## FASE OF-A — Cache local + carga instantánea (M)
+
+**Objetivo:** chats y mensajes en SQLite; UI instantánea desde disco; HTTP hidrata en background.
+
+**Crear** `whatsbot_app/lib/`:
+- `data/local/app_database.dart` (Drift, schemaVersion 1)
+- `data/local/tables/` — conversations, messages, sync_cursors
+- `data/local/daos/` — conversation_dao, message_dao, sync_cursor_dao
+- `data/repositories/chat_repository.dart`, `message_repository.dart`
+- `di/app_services.dart`
+
+**Modificar:**
+- `pubspec.yaml` — drift, path_provider, uuid, build_runner
+- `main.dart` — init DB/repos
+- `chats_list_screen.dart`, `chat_screen.dart` — streams del repo, no HTTP directo en carga inicial
+- `models/conversation.dart`, `models/message.dart` — campos para entidad local
+
+**Comportamiento:**
+- Login → hidratación inicial API → SQLite.
+- Cold start → lista/historial desde DB al instante (<100ms).
+- Mantener WS y polling 30s (se quitan en OF-D).
+
+**Validar:**
+```bash
+cd final_system/whatsbot_app
+flutter pub get && dart run build_runner build --delete-conflicting-outputs && flutter analyze
+
+
+
+
+
+
+#######################################
+## ## v1.12
+
+Prompt único — Offline-first WhatsBot (todas las fases)
+Copia todo el bloque de abajo en un chat nuevo. El agente ejecutará una fase a la vez y se detendrá hasta que respondas "Sí" (o "Sí, continúa con OF-X").
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/ARCHITECTURE.md
+@docs/FLUTTER_APP.md
+
+# WhatsBot — Offline-first (prompt maestro único)
+
+## Reglas globales (todas las fases)
+
+- Ejecuta **UNA sola fase por turno**. Al terminar cada fase: validación + pregunta explícita. **NO avances** sin mi "Sí".
+- Cambios en **`whatsbot_app/`** salvo gap API mínimo en Fase C (idempotencia opcional).
+- **NO tocar:** `chatbot/gateway.py`, intents, flujos del bot.
+- **Decisión de diseño ya tomada:** Drift (SQLite) como almacenamiento local.
+- **Prerequisito:** Fase 11 cerrada (WS + FCM + ticks + sync REST `since`/`after_id`).
+- Tras cada fase implementada: `flutter analyze` limpio; no romper login, pedidos, push, ticks.
+- Al iniciar el chat: lee el código actual y determina en qué fase estamos (A–E) antes de codificar.
+
+## Estado actual conocido
+
+- Solo `shared_preferences` para JWT (sin DB local de chats/mensajes).
+- `chats_list_screen.dart` / `chat_screen.dart` cargan vía HTTP; estado en RAM.
+- `realtime_service.dart`: WS + sync `since` al reconectar; polling 30s si WS cae.
+- `message_alerts_service.dart`: unread solo en memoria.
+
+## Índice de fases
+
+| Fase | Nombre | ¿Código? |
+|------|--------|----------|
+| OF0 | Análisis arquitectura | NO (solo informe) |
+| OF-A | Cache local + carga instantánea | SÍ |
+| OF-B | Sync incremental + WS→DB + dedup | SÍ |
+| OF-C | Cola saliente offline | SÍ |
+| OF-D | connectivity_plus + quitar polling | SÍ |
+| OF-E | Tests + docs + cierre | SÍ |
+
+**Empieza por OF0** si no hay informe previo en el chat. Si ya hicimos OF0, empieza por **OF-A**.
+
+---
+
+## FASE OF0 — Análisis (SIN código, SIN modificar archivos)
+
+Entrega informe técnico con:
+
+1. Diagnóstico: flujos actuales (`api_client`, pantallas, WS, alertas).
+2. Brechas offline priorizadas (crítico/alto/medio).
+3. Arquitectura propuesta: UI → Repository → Drift → Sync Engine → API/WS.
+4. Esquema local: conversations, messages, outbound_queue, sync_cursors, last_seen_at.
+5. Flujos: abrir app, abrir chat, enviar offline, reconectar, WS.
+6. Lista exacta de archivos a crear/modificar.
+7. Riesgos (idempotencia POST /messages, cursor `since`, retención 500 msgs/chat).
+
+**Al terminar pregunta:** "¿Procedo con OF-A (implementación)?" — PARAR.
+
+---
+
+## FASE OF-A — Cache local + carga instantánea (M)
+
+**Objetivo:** chats y mensajes en SQLite; UI instantánea desde disco; HTTP hidrata en background.
+
+**Crear** `whatsbot_app/lib/`:
+- `data/local/app_database.dart` (Drift, schemaVersion 1)
+- `data/local/tables/` — conversations, messages, sync_cursors
+- `data/local/daos/` — conversation_dao, message_dao, sync_cursor_dao
+- `data/repositories/chat_repository.dart`, `message_repository.dart`
+- `di/app_services.dart`
+
+**Modificar:**
+- `pubspec.yaml` — drift, path_provider, uuid, build_runner
+- `main.dart` — init DB/repos
+- `chats_list_screen.dart`, `chat_screen.dart` — streams del repo, no HTTP directo en carga inicial
+- `models/conversation.dart`, `models/message.dart` — campos para entidad local
+
+**Comportamiento:**
+- Login → hidratación inicial API → SQLite.
+- Cold start → lista/historial desde DB al instante (<100ms).
+- Mantener WS y polling 30s (se quitan en OF-D).
+
+**Validar:**
+```bash
+cd final_system/whatsbot_app
+flutter pub get && dart run build_runner build --delete-conflicting-outputs && flutter analyze
+
+
+
+## resp cursor después de todas las fases ##
+
+# FASE OF-E — Completada (offline-first cerrado)
+
+Última fase del bloque offline-first: tests automatizados, documentación actualizada y validación final.
+
+## Tests Flutter (`9 passed`)
+
+| Archivo | Qué valida |
+|---------|------------|
+| `test/repositories/message_repository_test.dart` | Cola offline, ACK, flush, dedup |
+| `test/repositories/chat_repository_test.dart` | Hidratación SQLite, `lastSeenAt` |
+| `test/sync/sync_engine_test.dart` | WS→DB, `syncOnReconnect` |
+| `test/widget_test.dart` | Smoke `LoginScreen` |
+| `test/helpers/test_api_client.dart` | Mock HTTP reutilizable |
+
+## Test backend
+
+- `test_send_message_client_id_idempotent` — mismo `client_id` → mismo `id`, Twilio llamado una sola vez
+
+## Documentación actualizada
+
+- `docs/FLUTTER_APP.md` — sección offline-first, estructura, checklist manual
+- `docs/ARCHITECTURE.md` — diagrama UI→Repo→Drift→Sync; sin polling 30 s
+- `docs/INCREMENTAL_GUIDE.md` — registro OF-A … OF-E ✅
+
+## Validación final
+
+```bash
+cd final_system
+python scripts/migrate_client_id.py
+python -m pytest tests/test_whatsbot_api.py::test_send_message_client_id_idempotent -v
+
+cd whatsbot_app
+dart run build_runner build --delete-conflicting-outputs
+flutter analyze    # No issues found!
+flutter test       # 9 passed
+```
+
+---
+
+## Resumen del bloque offline-first (OF0 → OF-E)
+
+| Fase | Entregable |
+|------|------------|
+| **OF0** | Informe arquitectura |
+| **OF-A** | Drift + repos + carga instantánea |
+| **OF-B** | SyncEngine + WS→DB + dedup |
+| **OF-C** | Cola saliente + `client_id` API |
+| **OF-D** | `connectivity_plus`, sin polling |
+| **OF-E** | Tests + docs + cierre |
+
+La app WhatsBot queda **offline-first**: chats e historial desde SQLite, envío en cola sin red, sync automática al volver la conexión, tiempo real vía WS/FCM intacto.
+
+**Fuera de alcance** (documentado): aprobar/rechazar pedidos offline, Redis multi-instancia, read receipts Twilio.
+
+
+
+
+
+#############################################

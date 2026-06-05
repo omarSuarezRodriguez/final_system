@@ -5,11 +5,10 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
 import '../config/api_config.dart';
-import '../models/conversation.dart';
 import '../models/realtime_event.dart';
 import 'api_client.dart';
 
-/// WebSocket tiempo real — Fase 11.3.
+/// WebSocket tiempo real — Fase 11.3 + OF-B (persistencia vía SyncEngine).
 ///
 /// Conecta tras login; reconexión con backoff; sync REST al reconectar.
 class RealtimeService {
@@ -30,15 +29,18 @@ class RealtimeService {
   bool _connecting = false;
   bool _connected = false;
   int _backoffSeconds = 1;
-  DateTime? _lastSyncAt;
+
+  /// Sync incremental al reconectar (delegado a SyncEngine).
+  Future<void> Function()? onReconnectSync;
+
+  /// Persiste evento WS en SQLite antes de emitirlo a la UI.
+  Future<void> Function(RealtimeEvent event)? persistEvent;
 
   Stream<RealtimeEvent> get events => _events.stream;
 
   Stream<bool> get connectionState => _connectionState.stream;
 
   bool get isConnected => _connected;
-
-  DateTime? get lastSyncAt => _lastSyncAt;
 
   Future<void> connect() async {
     if (!apiClient.isLoggedIn) return;
@@ -135,7 +137,24 @@ class RealtimeService {
       return;
     }
 
-    _events.add(RealtimeEvent.fromJson(map));
+    final event = RealtimeEvent.fromJson(map);
+    _emitAfterPersist(event);
+  }
+
+  void _emitAfterPersist(RealtimeEvent event) {
+    final persist = persistEvent;
+    if (persist == null) {
+      _events.add(event);
+      return;
+    }
+
+    unawaited(
+      persist(event).then((_) {
+        if (!_events.isClosed) _events.add(event);
+      }).catchError((_) {
+        if (!_events.isClosed) _events.add(event);
+      }),
+    );
   }
 
   void _handleDisconnect() {
@@ -172,28 +191,13 @@ class RealtimeService {
   }
 
   Future<void> _syncAfterReconnect() async {
+    final sync = onReconnectSync;
+    if (sync == null) return;
     try {
-      final since = _lastSyncAt;
-      final conversations = await apiClient.getConversations(since: since);
-      _lastSyncAt = DateTime.now().toUtc();
-      for (final conversation in conversations) {
-        _events.add(
-          RealtimeEvent(
-            type: 'conversation.sync',
-            conversation: conversation,
-          ),
-        );
-      }
+      await sync();
     } catch (_) {
       // Sync silencioso; el fallback REST reintentará.
     }
-  }
-
-  /// Sync incremental de mensajes para un chat abierto.
-  Future<List<Conversation>> syncConversations({DateTime? since}) async {
-    final list = await apiClient.getConversations(since: since);
-    _lastSyncAt = DateTime.now().toUtc();
-    return list;
   }
 }
 

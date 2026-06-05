@@ -1,14 +1,15 @@
-import 'dart:async' show StreamSubscription, Timer, unawaited;
+import 'dart:async' show StreamSubscription, unawaited;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../config/api_config.dart';
+import '../data/repositories/chat_repository.dart';
+import '../di/app_services.dart';
 import '../models/conversation.dart';
-import '../models/message.dart';
 import '../models/realtime_event.dart';
 import '../main.dart';
 import '../services/api_client.dart';
+import '../services/connectivity_service.dart';
 import '../services/message_alerts_service.dart';
 import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
@@ -23,12 +24,13 @@ class ChatsListScreen extends StatefulWidget {
 }
 
 class _ChatsListScreenState extends State<ChatsListScreen> {
-  List<Conversation> _conversations = [];
-  bool _loading = true;
+  bool _refreshing = false;
   String? _error;
-  Timer? _fallbackTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectionSub;
+  StreamSubscription<bool>? _connectivitySub;
+
+  ChatRepository get _chats => AppServices.chatRepository;
 
   @override
   void initState() {
@@ -37,10 +39,12 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     unawaited(realtimeService.connect());
     _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
     _connectionSub = realtimeService.connectionState.listen((_) {
-      _configureFallbackTimer();
+      if (mounted) setState(() {});
     });
-    _load();
-    _configureFallbackTimer();
+    _connectivitySub = connectivityService.onlineState.listen((_) {
+      if (mounted) setState(() {});
+    });
+    unawaited(_refresh(silent: true));
   }
 
   @override
@@ -48,132 +52,38 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     messageAlerts.onOpenConversation = null;
     _realtimeSub?.cancel();
     _connectionSub?.cancel();
-    _fallbackTimer?.cancel();
+    _connectivitySub?.cancel();
     super.dispose();
   }
 
-  void _configureFallbackTimer() {
-    _fallbackTimer?.cancel();
-    if (realtimeService.isConnected) return;
-    _fallbackTimer = Timer.periodic(ApiConfig.fallbackPollInterval, (_) {
-      if (!realtimeService.isConnected) {
-        _load(silent: true);
-      }
-    });
-  }
+  bool get _showOfflineIcon =>
+      !connectivityService.isOnline || !realtimeService.isConnected;
 
-  void _onRealtimeEvent(RealtimeEvent event) {
+  Future<void> _onRealtimeEvent(RealtimeEvent event) async {
     if (!mounted) return;
 
-    switch (event.type) {
-      case 'message.new':
-        final message = event.message;
-        final conversation = event.conversation;
-        if (message != null && conversation != null) {
-          _upsertConversation(_mergeConversationWithMessage(conversation, message));
-          unawaited(
-            messageAlerts.handleRealtimeMessage(
-              conversation: conversation,
-              message: message,
-            ),
-          );
-        } else if (message != null) {
-          final bumped = _bumpConversationFromMessage(message);
-          if (bumped != null) {
-            unawaited(
-              messageAlerts.handleRealtimeMessage(
-                conversation: bumped,
-                message: message,
-              ),
-            );
-          }
-        } else if (conversation != null) {
-          _upsertConversation(conversation);
-        }
-        break;
-      case 'conversation.updated':
-      case 'conversation.sync':
-        final conversation = event.conversation;
-        if (conversation != null) {
-          _upsertConversation(conversation);
-        }
-        break;
-    }
-  }
+    if (event.type != 'message.new') return;
 
-  Conversation _mergeConversationWithMessage(
-    Conversation conversation,
-    ChatMessage message,
-  ) {
-    final preview = message.body.length > 80
-        ? '${message.body.substring(0, 77)}...'
-        : message.body;
-    final lastAt = conversation.lastMessageAt;
-    final messageAt = message.createdAt;
-    final newestAt = lastAt == null || messageAt.isAfter(lastAt)
-        ? messageAt
-        : lastAt;
-    return conversation.copyWith(
-      lastMessagePreview: preview,
-      lastMessageAt: newestAt,
-      updatedAt: newestAt,
+    final message = event.message;
+    if (message == null || message.isOutgoing) return;
+
+    final conversation = event.conversation ??
+        await _chats.getConversation(message.conversationId);
+    if (conversation == null) return;
+
+    unawaited(
+      messageAlerts.handleRealtimeMessage(
+        conversation: conversation,
+        message: message,
+      ),
     );
   }
 
-  Conversation? _bumpConversationFromMessage(ChatMessage message) {
-    final index =
-        _conversations.indexWhere((item) => item.id == message.conversationId);
-    if (index < 0) {
-      unawaited(_load(silent: true));
-      return null;
-    }
-    final updated =
-        _mergeConversationWithMessage(_conversations[index], message);
-    _upsertConversation(updated);
-    return updated;
-  }
-
-  void _upsertConversation(Conversation conversation) {
-    final index =
-        _conversations.indexWhere((item) => item.id == conversation.id);
-    setState(() {
-      if (index >= 0) {
-        _conversations[index] = conversation;
-      } else {
-        _conversations.add(conversation);
-      }
-      _sortConversations();
-      _loading = false;
-      _error = null;
-    });
-  }
-
-  void _sortConversations() {
-    _conversations.sort((a, b) {
-      final aTime = a.lastMessageAt ?? a.updatedAt;
-      final bTime = b.lastMessageAt ?? b.updatedAt;
-      final byTime = bTime.compareTo(aTime);
-      if (byTime != 0) return byTime;
-      return b.id.compareTo(a.id);
-    });
-  }
-
   Future<void> _openConversationById(int conversationId) async {
-    Conversation? chat;
-    for (final item in _conversations) {
-      if (item.id == conversationId) {
-        chat = item;
-        break;
-      }
-    }
+    Conversation? chat = await _chats.getConversation(conversationId);
     if (chat == null) {
-      await _load(silent: true);
-      for (final item in _conversations) {
-        if (item.id == conversationId) {
-          chat = item;
-          break;
-        }
-      }
+      await _refresh(silent: true);
+      chat = await _chats.getConversation(conversationId);
     }
     if (chat == null || !mounted) return;
 
@@ -182,37 +92,46 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     await nav.push(
       MaterialPageRoute(builder: (_) => ChatScreen(conversation: chat!)),
     );
-    if (mounted) _load(silent: true);
+    if (mounted) unawaited(_refresh(silent: true));
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _refresh({bool silent = false}) async {
+    if (!connectivityService.isOnline) {
+      if (!silent && mounted) {
+        setState(() {
+          _refreshing = false;
+          _error = 'Sin conexión. Los chats guardados siguen disponibles.';
+        });
+      }
+      return;
+    }
+
     if (!silent) {
       setState(() {
-        _loading = true;
+        _refreshing = true;
         _error = null;
       });
     }
     try {
-      final list = await apiClient.getConversations();
+      final list = await AppServices.syncEngine.syncConversationsIncremental();
       if (!mounted) return;
       setState(() {
-        _conversations = list;
-        _loading = false;
+        _refreshing = false;
+        _error = null;
       });
-      _sortConversations();
       await messageAlerts.handleConversations(list);
       if (mounted) setState(() {});
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.message;
-        _loading = false;
+        if (!silent) _error = e.message;
+        _refreshing = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = 'Sin conexión con la API';
-        _loading = false;
+        if (!silent) _error = 'Sin conexión con la API';
+        _refreshing = false;
       });
     }
   }
@@ -235,7 +154,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       appBar: AppBar(
         title: Text(apiClient.businessName ?? 'WhatsBot'),
         actions: [
-          if (!realtimeService.isConnected)
+          if (_showOfflineIcon)
             const Padding(
               padding: EdgeInsets.only(right: 4),
               child: Icon(
@@ -251,126 +170,136 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
               await Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const SettingsScreen()),
               );
-              if (mounted) _load(silent: true);
+              if (mounted) unawaited(_refresh(silent: true));
             },
           ),
         ],
       ),
-      body: _loading && _conversations.isEmpty
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null && _conversations.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!),
-                      const SizedBox(height: 12),
-                      FilledButton(
-                        onPressed: _load,
-                        child: const Text('Reintentar'),
+      body: StreamBuilder<List<Conversation>>(
+        stream: _chats.watchConversations(),
+        builder: (context, snapshot) {
+          final conversations = snapshot.data ?? [];
+          final showSpinner = conversations.isEmpty && _refreshing;
+          final showError = conversations.isEmpty && _error != null;
+
+          if (showSpinner) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (showError) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                    onPressed: () => _refresh(),
+                    child: const Text('Reintentar'),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return RefreshIndicator(
+            onRefresh: () => _refresh(),
+            child: conversations.isEmpty
+                ? ListView(
+                    children: const [
+                      SizedBox(height: 120),
+                      Center(
+                        child: Text(
+                          'Aún no hay conversaciones.\n'
+                          'Cuando un cliente escriba al bot, aparecerá aquí.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: WhatsAppTheme.subtitleGrey),
+                        ),
                       ),
                     ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: _conversations.isEmpty
-                      ? ListView(
-                          children: const [
-                            SizedBox(height: 120),
-                            Center(
-                              child: Text(
-                                'Aún no hay conversaciones.\n'
-                                'Cuando un cliente escriba al bot, aparecerá aquí.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: WhatsAppTheme.subtitleGrey),
+                  )
+                : ListView.separated(
+                    itemCount: conversations.length,
+                    separatorBuilder: (context, index) => const Divider(
+                      height: 1,
+                      indent: 72,
+                    ),
+                    itemBuilder: (context, index) {
+                      final chat = conversations[index];
+                      final unread =
+                          messageAlerts.isConversationUnread(chat);
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: WhatsAppTheme.accentGreen,
+                          child: Text(
+                            chat.displayName.isNotEmpty
+                                ? chat.displayName[0].toUpperCase()
+                                : '?',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        title: Text(
+                          chat.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight:
+                                unread ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        subtitle: Text(
+                          chat.lastMessagePreview ?? '',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: unread
+                                ? Colors.black87
+                                : WhatsAppTheme.subtitleGrey,
+                            fontWeight:
+                                unread ? FontWeight.w600 : FontWeight.normal,
+                          ),
+                        ),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              _formatTime(chat.lastMessageAt),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: unread
+                                    ? WhatsAppTheme.accentGreen
+                                    : WhatsAppTheme.subtitleGrey,
+                                fontWeight:
+                                    unread ? FontWeight.w600 : FontWeight.normal,
                               ),
                             ),
+                            if (unread) ...[
+                              const SizedBox(height: 6),
+                              Container(
+                                width: 10,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: WhatsAppTheme.accentGreen,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
                           ],
-                        )
-                      : ListView.separated(
-                          itemCount: _conversations.length,
-                          separatorBuilder: (context, index) => const Divider(
-                            height: 1,
-                            indent: 72,
-                          ),
-                          itemBuilder: (context, index) {
-                            final chat = _conversations[index];
-                            final unread =
-                                messageAlerts.isConversationUnread(chat);
-                            return ListTile(
-                              leading: CircleAvatar(
-                                backgroundColor: WhatsAppTheme.accentGreen,
-                                child: Text(
-                                  chat.displayName.isNotEmpty
-                                      ? chat.displayName[0].toUpperCase()
-                                      : '?',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              ),
-                              title: Text(
-                                chat.displayName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontWeight: unread
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                              subtitle: Text(
-                                chat.lastMessagePreview ?? '',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: unread
-                                      ? Colors.black87
-                                      : WhatsAppTheme.subtitleGrey,
-                                  fontWeight:
-                                      unread ? FontWeight.w600 : FontWeight.normal,
-                                ),
-                              ),
-                              trailing: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    _formatTime(chat.lastMessageAt),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: unread
-                                          ? WhatsAppTheme.accentGreen
-                                          : WhatsAppTheme.subtitleGrey,
-                                      fontWeight: unread
-                                          ? FontWeight.w600
-                                          : FontWeight.normal,
-                                    ),
-                                  ),
-                                  if (unread) ...[
-                                    const SizedBox(height: 6),
-                                    Container(
-                                      width: 10,
-                                      height: 10,
-                                      decoration: const BoxDecoration(
-                                        color: WhatsAppTheme.accentGreen,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              onTap: () async {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => ChatScreen(conversation: chat),
-                                  ),
-                                );
-                                _load(silent: true);
-                              },
-                            );
-                          },
                         ),
-                ),
+                        onTap: () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ChatScreen(conversation: chat),
+                            ),
+                          );
+                          unawaited(_refresh(silent: true));
+                        },
+                      );
+                    },
+                  ),
+          );
+        },
+      ),
     );
   }
 }

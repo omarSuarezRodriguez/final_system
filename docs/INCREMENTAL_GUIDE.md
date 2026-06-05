@@ -364,3 +364,48 @@ python -m pytest tests/test_order_confirmation_flow.py -v
 python scripts/validate_chatbot.py
 cd whatsbot_app && flutter analyze
 ```
+
+---
+
+## Offline-first WhatsBot (OF-A — OF-E) ✅
+
+### OF-A — Cache local + carga instantánea ✅
+
+- [x] Drift SQLite: `conversations`, `messages`, `sync_cursors`
+- [x] `ChatRepository`, `MessageRepository`, `AppServices`
+- [x] UI lee streams locales; HTTP hidrata en background
+
+### OF-B — Sync incremental + WS→DB + dedup ✅
+
+- [x] `SyncEngine` centraliza REST + eventos WS → SQLite
+- [x] Dedup en upsert; retención 500 msgs/chat
+- [x] `RealtimeService.persistEvent` escribe antes de emitir a UI
+
+### OF-C — Cola saliente offline ✅
+
+- [x] Tabla `outbound_queue`; mensajes optimistas (`status: pending`)
+- [x] `flushOutboundQueue` al reconectar / volver online
+- [x] API: `client_id` opcional + `scripts/migrate_client_id.py`
+
+### OF-D — connectivity_plus + sin polling ✅
+
+- [x] `connectivity_service.dart` reemplaza polling 30 s
+- [x] Sync al detectar red; icono nube si offline o WS caído
+
+### OF-E — Tests + docs + cierre ✅
+
+- [x] `flutter test` — repositorios, sync engine, smoke UI
+- [x] `docs/FLUTTER_APP.md`, `ARCHITECTURE.md` actualizados
+- [x] Checklist manual offline documentado
+
+```bash
+cd final_system
+python scripts/migrate_client_id.py
+python -m pytest tests/test_whatsbot_api.py -v
+cd whatsbot_app
+dart run build_runner build --delete-conflicting-outputs
+flutter analyze
+flutter test
+```
+
+**Fases offline-first cerradas.** Pedidos offline (aprobar/rechazar sin red) quedan fuera de alcance.

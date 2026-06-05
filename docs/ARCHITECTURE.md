@@ -42,7 +42,8 @@ flowchart LR
 |-------|--------|-----|
 | WebSocket | App abierta, `REALTIME_ENABLED=true` | `message.new`, `order.pending`, ticks |
 | FCM/APNs | App background/cerrada, `FCM_ENABLED=true` | Push si no hay WS activo |
-| REST fallback | WS caído | `?since=` / `?after_id=` cada 30 s |
+| REST sync | Reconexión WS o vuelta de red | `?since=` / `?after_id=` vía `SyncEngine` |
+| SQLite local (app) | Siempre | Caché offline Drift; cola saliente `client_id` |
 
 ## Capas `final_system/`
 
@@ -63,6 +64,20 @@ flowchart LR
 
 Todas en `final_system/.env` (migradas Fase 1 desde `.env` en raíz).  
 Flutter solo conoce `API_PUBLIC_URL` — nunca `TWILIO_AUTH_TOKEN`.
+
+## App Flutter — offline-first
+
+```mermaid
+flowchart TB
+    UI[Pantallas] --> REPO[Repositories]
+    REPO --> DRIFT[(SQLite Drift)]
+    REPO --> SYNC[SyncEngine]
+    SYNC --> API[REST API]
+    SYNC --> WS[WebSocket]
+    CONN[connectivity_plus] --> SYNC
+```
+
+Ver `docs/FLUTTER_APP.md` y `INCREMENTAL_GUIDE.md` (fases OF-A — OF-E).
 
 ## Próximas fases
 

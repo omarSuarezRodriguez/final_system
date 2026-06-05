@@ -132,11 +132,19 @@ class ApiClient {
   Future<ChatMessage> sendMessage({
     required String customerWaId,
     required String body,
+    String? clientId,
   }) async {
+    final payload = <String, dynamic>{
+      'customer_wa_id': customerWaId,
+      'body': body,
+    };
+    if (clientId != null && clientId.isNotEmpty) {
+      payload['client_id'] = clientId;
+    }
     final response = await _http.post(
       _uri('/whatsbot/messages'),
       headers: _authHeaders,
-      body: jsonEncode({'customer_wa_id': customerWaId, 'body': body}),
+      body: jsonEncode(payload),
     );
     _ensureOk(response, expected: {201, 200});
     return ChatMessage.fromJson(

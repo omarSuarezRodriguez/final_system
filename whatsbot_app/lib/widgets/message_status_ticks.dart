@@ -27,6 +27,9 @@ class MessageStatusTicks extends StatelessWidget {
       case 'sent':
         color = WhatsAppTheme.subtitleGrey.withValues(alpha: 0.85);
         icon = Icons.done;
+      case 'pending':
+        color = WhatsAppTheme.subtitleGrey.withValues(alpha: 0.6);
+        icon = Icons.schedule;
       default:
         color = WhatsAppTheme.subtitleGrey.withValues(alpha: 0.6);
         icon = Icons.access_time;

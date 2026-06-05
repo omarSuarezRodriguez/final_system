@@ -91,8 +91,45 @@ La app guarda el JWT en `shared_preferences` y lo envía como `Authorization: Be
 
 - **WebSocket** `wss://{API}/whatsbot/ws?token=<JWT>` — mensajes al instante.
 - Servicio: `lib/services/realtime_service.dart` (reconexión + sync `since`/`after_id`).
-- **Fallback:** REST cada 30 s solo si el WS no está conectado (`ApiConfig.fallbackPollInterval`).
+- **Sync al reconectar:** `SyncEngine` + `connectivity_plus` (sin polling periódico).
 - Pull-to-refresh sigue disponible en la lista de chats.
+
+## Offline-first (OF-A — OF-E)
+
+La app funciona sin red: chats e historial desde SQLite; sync al volver online.
+
+| Capa | Ubicación |
+|------|-----------|
+| SQLite local | `lib/data/local/` (Drift) |
+| Repositorios | `lib/data/repositories/` |
+| Motor de sync | `lib/data/sync/sync_engine.dart` |
+| Cola saliente | `outbound_queue` + `MessageRepository.sendMessage` |
+| Conectividad | `lib/services/connectivity_service.dart` |
+
+### Comportamiento
+
+1. **Cold start** — lista e historial desde disco (<100 ms si hay caché).
+2. **Sin red** — datos locales visibles; envío encola mensaje optimista (`status: pending`).
+3. **Vuelve red** — `flushOutboundQueue` + sync incremental + reconexión WS.
+4. **Idempotencia** — `client_id` en `POST /whatsbot/messages` evita duplicados en reintento.
+
+### Validación offline-first
+
+```bash
+cd final_system/whatsbot_app
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs
+flutter analyze
+flutter test
+```
+
+### Checklist manual offline
+
+1. Login con API → ver chats → cerrar app → reabrir → lista instantánea.
+2. Modo avión → abrir chat → historial local visible.
+3. Modo avión → enviar mensaje → burbuja con reloj pendiente.
+4. Quitar modo avión → mensaje se envía; ticks normales.
+5. WS activo → mensaje cliente aparece al instante y persiste tras reinicio.
 
 ## Push FCM/APNs (Fase 11.4)
 
@@ -164,17 +201,18 @@ Ver también: `docs/GUIA_EDICION_APP.md` (tutorial para el dueño del negocio).
 ```
 whatsbot_app/lib/
 ├── config/api_config.dart
+├── di/app_services.dart
+├── data/
+│   ├── local/          # Drift: conversations, messages, sync_cursors, outbound_queue
+│   ├── repositories/   # chat_repository, message_repository
+│   └── sync/           # sync_engine.dart
 ├── theme/whatsapp_theme.dart
-├── services/api_client.dart
+├── services/
+│   ├── api_client.dart
+│   ├── realtime_service.dart
+│   ├── connectivity_service.dart
+│   └── message_alerts_service.dart
 ├── models/
 ├── screens/
-│   ├── login_screen.dart
-│   ├── chats_list_screen.dart
-│   ├── chat_screen.dart
-│   ├── order_actions_bar.dart
-│   ├── settings_screen.dart
-│   ├── menu_editor_screen.dart
-│   ├── intents_editor_screen.dart
-│   └── prompts_editor_screen.dart
-└── widgets/message_bubble.dart
+└── widgets/
 ```

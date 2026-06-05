@@ -1,5 +1,8 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
+import 'di/app_services.dart';
 import 'screens/chats_list_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/api_client.dart';
@@ -13,6 +16,7 @@ final navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppServices.init();
   await messageAlerts.init();
   await pushService.init();
   runApp(const WhatsBotApp());
@@ -55,6 +59,7 @@ class _SplashGateState extends State<SplashGate> {
     if (apiClient.isLoggedIn) {
       await pushService.registerAfterLogin();
       await realtimeService.connect();
+      unawaited(AppServices.hydrateAfterLogin());
     }
     if (!mounted) return;
     Navigator.of(context).pushReplacement(

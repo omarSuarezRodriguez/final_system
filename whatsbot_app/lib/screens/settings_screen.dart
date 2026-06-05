@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../di/app_services.dart';
 import '../models/business.dart';
 import '../services/api_client.dart';
 import '../services/push_service.dart';
@@ -44,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _logout() async {
     await realtimeService.disconnect();
     await pushService.unregisterOnLogout();
+    await AppServices.clearLocalData();
     await apiClient.logout();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

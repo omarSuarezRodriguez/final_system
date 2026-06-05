@@ -1,5 +1,8 @@
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 
+import '../di/app_services.dart';
 import '../services/api_client.dart';
 import '../services/message_alerts_service.dart';
 import '../services/push_service.dart';
@@ -40,6 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
       messageAlerts.seedFromLogin();
       await pushService.registerAfterLogin();
       await realtimeService.connect();
+      unawaited(AppServices.hydrateAfterLogin());
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ChatsListScreen()),

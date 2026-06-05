@@ -115,6 +115,27 @@ def save_incoming_message(
     return msg
 
 
+def get_message_by_client_id(
+    db: Session,
+    business_id: str,
+    client_id: str,
+) -> Message | None:
+    """Idempotencia app móvil: reutilizar mensaje ya guardado."""
+    bid = _normalize_business_id(business_id)
+    cid = (client_id or "").strip()
+    if not cid:
+        return None
+    return (
+        db.query(Message)
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .filter(
+            Conversation.business_id == bid,
+            Message.client_id == cid,
+        )
+        .one_or_none()
+    )
+
+
 def save_outgoing_message(
     db: Session,
     *,
@@ -124,6 +145,7 @@ def save_outgoing_message(
     is_admin: bool = False,
     channel: str = "whatsapp",
     twilio_sid: str | None = None,
+    client_id: str | None = None,
 ) -> list[Message]:
     """Store bot reply (one row per TwiML/REST part)."""
     if not body:
@@ -148,6 +170,7 @@ def save_outgoing_message(
             is_admin=is_admin,
             channel=channel,
             twilio_sid=twilio_sid,
+            client_id=client_id if is_admin and client_id else None,
             status="sent" if is_admin else "delivered",
             delivered_at=None if is_admin else now,
             created_at=now,

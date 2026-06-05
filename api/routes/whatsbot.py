@@ -151,6 +151,12 @@ async def send_owner_message(
     Salida: mensaje guardado en BD; envío Twilio vía línea del bot (TWILIO_WHATSAPP_FROM).
     """
     _require_business(db, business_id)
+    if body.client_id:
+        existing = conv_svc.get_message_by_client_id(
+            db, business_id, body.client_id
+        )
+        if existing is not None:
+            return existing
     ctx = get_bot_context(start_background=False)
     wa_id = ctx.admin_service.canonical_wa_id(body.customer_wa_id, "") or body.customer_wa_id
     send_whatsapp_message(wa_id, body.body)
@@ -160,6 +166,7 @@ async def send_owner_message(
         body=body.body,
         business_id=business_id,
         is_admin=True,
+        client_id=body.client_id,
     )
     db.commit()
     if not saved:
