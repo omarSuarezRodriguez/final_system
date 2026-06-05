@@ -34,6 +34,7 @@ Future<TestApiClient> setUpTestAppServices() async {
   realtimeService.onReconnectSync = AppServices.syncEngine.syncOnReconnect;
   realtimeService.persistEvent = AppServices.syncEngine.handleRealtimeEvent;
   realtimeService.connectivityOnline = () => true;
+  realtimeService.shouldSyncOnConnect = () => true;
   AppServices.syncEngine.onIncomingMessage = (
     Conversation conversation,
     ChatMessage message,

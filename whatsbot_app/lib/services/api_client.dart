@@ -44,6 +44,7 @@ class ApiClient {
 
   Map<String, String> get _authHeaders => {
         'Content-Type': 'application/json',
+        ...ApiConfig.connectionHeaders,
         if (_token != null) 'Authorization': 'Bearer $_token',
       };
 

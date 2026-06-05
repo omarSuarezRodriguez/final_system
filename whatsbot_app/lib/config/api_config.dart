@@ -9,6 +9,14 @@ class ApiConfig {
   static const String apiBaseUrl =
       'https://snowman-shower-pellet.ngrok-free.dev';
 
+  /// Headers extra (ngrok free interstitial en móvil).
+  static Map<String, String> get connectionHeaders {
+    if (apiBaseUrl.contains('ngrok')) {
+      return const {'ngrok-skip-browser-warning': 'true'};
+    }
+    return const {};
+  }
+
   /// URL WebSocket derivada de [apiBaseUrl].
   static String get wsBaseUrl {
     final base = apiBaseUrl;

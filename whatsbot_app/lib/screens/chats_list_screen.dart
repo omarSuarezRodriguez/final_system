@@ -47,8 +47,9 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
       }
       _wasConnected = connected;
     });
-    _connectivitySub = connectivityService.onlineState.listen((_) {
+    _connectivitySub = connectivityService.onlineState.listen((online) {
       if (mounted) setState(() {});
+      if (online) unawaited(AppServices.onAppResumed());
     });
     unawaited(_refresh(silent: true));
   }

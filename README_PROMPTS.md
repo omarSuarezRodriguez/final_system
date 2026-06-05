@@ -1,4 +1,4 @@
-## v1.28
+## v1.29
 
 
 
@@ -3590,3 +3590,71 @@ Si tras el restart sigue fallando, revisa que no aparezca el icono de nube offli
 
 
 #######################################
+## v1.29
+
+
+## prompt ##
+
+No funciona, necesito que revises y verifiques eso que te pido, que tengas certeza que los mensajes llegan y se visualizan de manera correcta, que están sincronizados pero sin el polling ese, osea sincronizados como hace whatsapp, implementalo y verifica que funcione, haz pruebas y hasta que no funcione y hayas verificado tu mismo no me muetres, puedes hacer las pruebas
+
+
+## resp cursor ##
+
+Causa raíz
+Tras la instalación nueva pasaba esto:
+
+REST cargaba los chats (login) ✅
+El WebSocket se conectaba mal o se quedaba colgado (sin headers ngrok en móvil, sin timeout, carrera de sync doble)
+Los mensajes en vivo solo llegaban por WS → si el socket moría, la app quedaba congelada en la carga inicial
+Lo confirmé con pruebas en vivo contra tu API:
+
+LOGIN_OK → WS connected → POST mensaje → EVENT message.new ✅
+WEBHOOK cliente → INCOMING_OK message.new ✅
+Cambios implementados (patrón WhatsApp, sin polling)
+Cambio	Qué hace
+IOWebSocketChannel + headers ngrok
+Conexión WS estable en móvil
+Orden de sesión
+Primero hidrata caché REST, luego abre WS y espera connected
+Mutex en sync
+Evita carrera login + WS connected que corrompía el estado
+Sin timer de 90s
+Eliminado el polling; solo WS + sync al reconectar/resumir
+Keepalive
+Ping cada 25s + watchdog que reconecta si el socket muere
+Al volver a primer plano
+Reconecta WS + trae delta una vez
+Pruebas ejecutadas (todas OK)
+40 tests Flutter — incluido test/integration/realtime_e2e_test.dart:
+Carga inicial → 2 mensajes WS seguidos actualizan lista y SQLite ✅
+Sync concurrente no rompe estado ✅
+Mensaje con conversation_id distinto se guarda en hilo local ✅
+E2E en vivo ngrok — login + WS + envío REST → message.new ✅
+E2E webhook entrante — cliente escribe → message.new en WS ✅
+dart analyze lib — sin errores ✅
+Flujo final (como WhatsApp)
+Login → REST hidrata SQLite (caché instantánea)
+      → WS conecta y queda abierto
+      → Mensajes nuevos: WS → SQLite → UI (Drift stream)
+      → Si WS cae: reconexión automática + sync delta (una vez, no polling)
+Para probar en tu teléfono
+Hot restart (R en la terminal de flutter run) — obligatorio
+Desinstala/reinstala si quieres simular instalación nueva
+PIN: changeme (según tu .env)
+Deja la app en la lista de chats y pide a un cliente que escriba
+El icono de nube tachada no debería quedarse fijo; si aparece un momento, debe reconectar solo
+Si tras el restart sigue fallando, dime si el icono de nube offline se queda permanente.
+
+
+
+
+
+
+
+#######################################
+
+
+
+
+
+

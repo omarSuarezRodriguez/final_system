@@ -1,5 +1,3 @@
-import 'dart:async' show Timer, unawaited;
-
 import '../data/local/app_database.dart';
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
@@ -21,7 +19,7 @@ class AppServices {
   static late SyncEngine syncEngine;
 
   static bool _initialized = false;
-  static Timer? _foregroundSyncTimer;
+  static bool _hydratedThisSession = false;
 
   static bool get isInitialized => _initialized;
 
@@ -41,6 +39,7 @@ class AppServices {
     realtimeService.onReconnectSync = syncEngine.syncOnReconnect;
     realtimeService.persistEvent = syncEngine.handleRealtimeEvent;
     realtimeService.connectivityOnline = () => connectivityService.isOnline;
+    realtimeService.shouldSyncOnConnect = () => !_hydratedThisSession;
     syncEngine.onIncomingMessage = _onIncomingMessage;
   }
 
@@ -65,47 +64,39 @@ class AppServices {
 
   static Future<void> clearLocalData() async {
     if (!_initialized) return;
+    _hydratedThisSession = false;
     await database.clearAll();
   }
 
-  /// Login / cold start: WS + hidratación + keepalive (sesión WhatsApp).
+  /// Login / cold start: REST hidrata caché + WS para vivo (sin polling).
   static Future<void> startRealtimeSession() async {
     if (!_initialized || !apiClient.isLoggedIn) return;
-    await realtimeService.connect();
+
+    // 1) Caché local desde REST (como WhatsApp al abrir la app)
     await hydrateAfterLogin();
-    _startForegroundFallback();
+
+    // 2) Socket en paralelo; si `connected` llega tarde, syncGap lo cubre
+    await realtimeService.connect();
+    await realtimeService.waitUntilConnected();
   }
 
-  /// Vuelta a primer plano: reconectar WS y traer delta.
+  /// Vuelta a primer plano: reconectar WS + delta REST una vez.
   static Future<void> onAppResumed() async {
     if (!_initialized || !apiClient.isLoggedIn) return;
     await realtimeService.onAppResumed();
-    _startForegroundFallback();
   }
 
-  /// Cola saliente + sync incremental (también tras reconexión WS).
+  /// Cola saliente + sync incremental (una vez por sesión en login).
   static Future<void> hydrateAfterLogin() async {
     if (!_initialized) return;
     await syncEngine.syncOnReconnect();
+    realtimeService.markSyncCompleted();
+    _hydratedThisSession = true;
   }
 
-  /// Reintenta WS cada 90s si se cayó con la app abierta.
-  static void _startForegroundFallback() {
-    _foregroundSyncTimer?.cancel();
-    _foregroundSyncTimer = Timer.periodic(
-      const Duration(seconds: 90),
-      (_) => unawaited(_foregroundSyncTick()),
-    );
+  static void resetSessionFlags() {
+    _hydratedThisSession = false;
   }
 
-  static Future<void> _foregroundSyncTick() async {
-    if (!apiClient.isLoggedIn || !connectivityService.isOnline) return;
-    if (realtimeService.isConnected) return;
-    await realtimeService.ensureConnected();
-  }
-
-  static void stopForegroundFallback() {
-    _foregroundSyncTimer?.cancel();
-    _foregroundSyncTimer = null;
-  }
+  static void stopForegroundFallback() {}
 }

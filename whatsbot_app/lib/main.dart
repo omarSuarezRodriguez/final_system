@@ -54,6 +54,7 @@ class _SplashGateState extends State<SplashGate> {
   Future<void> _init() async {
     await apiClient.loadSession();
     if (apiClient.isLoggedIn) {
+      AppServices.resetSessionFlags();
       await pushService.registerAfterLogin();
       await AppServices.startRealtimeSession();
     }

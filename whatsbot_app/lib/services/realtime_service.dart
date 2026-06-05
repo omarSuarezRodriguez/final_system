@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config/api_config.dart';
 import '../models/realtime_event.dart';
@@ -10,9 +11,9 @@ import 'api_client.dart';
 
 /// WebSocket tiempo real — sesión persistente estilo WhatsApp.
 ///
-/// - Conecta tras login y mantiene la sesión con ping + watchdog
-/// - Reconexión con backoff si se cae (ngrok, red, etc.)
-/// - Sync REST incremental al reconectar o al volver a primer plano
+/// - Socket único con keepalive (ping + watchdog)
+/// - Sync REST solo al reconectar / volver a primer plano (sin polling)
+/// - Persistencia SQLite antes de notificar a la UI
 class RealtimeService {
   RealtimeService._();
 
@@ -34,12 +35,14 @@ class RealtimeService {
   Timer? _ackTimeoutTimer;
   Timer? _clientPingTimer;
   Timer? _watchdogTimer;
+  Completer<void>? _connectedCompleter;
 
   bool _intentionalDisconnect = false;
   bool _connecting = false;
   bool _connected = false;
   int _backoffSeconds = 1;
   DateTime? _lastActivityAt;
+  DateTime? _lastSyncAt;
 
   /// Evita abrir WebSocket real en widget tests.
   bool disableSocketForTesting = false;
@@ -49,6 +52,9 @@ class RealtimeService {
 
   /// Persiste evento WS en SQLite antes de emitirlo a la UI.
   Future<void> Function(RealtimeEvent event)? persistEvent;
+
+  /// Si devuelve false, se omite sync al recibir frame `connected`.
+  bool Function()? shouldSyncOnConnect;
 
   Stream<RealtimeEvent> get events => _events.stream;
 
@@ -65,6 +71,27 @@ class RealtimeService {
     _startKeepAlive();
   }
 
+  /// Espera hasta que el servidor confirme `connected` (o timeout).
+  Future<bool> waitUntilConnected({
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (_connected) return true;
+    if (disableSocketForTesting) return false;
+    _connectedCompleter ??= Completer<void>();
+    try {
+      await _connectedCompleter!.future.timeout(timeout);
+      return _connected;
+    } on TimeoutException {
+      return false;
+    } finally {
+      _connectedCompleter = null;
+    }
+  }
+
+  void markSyncCompleted() {
+    _lastSyncAt = DateTime.now();
+  }
+
   /// Reconecta y sincroniza al volver a primer plano (patrón WhatsApp).
   Future<void> onAppResumed() async {
     if (!apiClient.isLoggedIn || disableSocketForTesting) return;
@@ -75,7 +102,7 @@ class RealtimeService {
       await _openSocket();
     }
     _startKeepAlive();
-    await _syncAfterReconnect();
+    await _syncAfterReconnect(force: true);
   }
 
   /// Fuerza reconexión si la sesión quedó colgada.
@@ -100,6 +127,8 @@ class RealtimeService {
     _intentionalDisconnect = true;
     _stopKeepAlive();
     _reconnectTimer?.cancel();
+    _connectedCompleter?.completeError(StateError('disconnected'));
+    _connectedCompleter = null;
     await _subscription?.cancel();
     _subscription = null;
     try {
@@ -111,7 +140,7 @@ class RealtimeService {
   }
 
   Future<void> syncNow() async {
-    await _syncAfterReconnect();
+    await _syncAfterReconnect(force: true);
   }
 
   void sendTyping({required int conversationId, required bool isTyping}) {
@@ -148,8 +177,12 @@ class RealtimeService {
       final uri = Uri.parse(
         '${ApiConfig.wsBaseUrl}/whatsbot/ws?token=${Uri.encodeComponent(token)}',
       );
-      final channel = WebSocketChannel.connect(uri);
+      final channel = IOWebSocketChannel.connect(
+        uri,
+        headers: ApiConfig.connectionHeaders,
+      );
       _channel = channel;
+      _touchActivity();
       _subscription = channel.stream.listen(
         _onData,
         onError: (_) => _forceReconnect(),
@@ -189,6 +222,8 @@ class RealtimeService {
       _connecting = false;
       _backoffSeconds = 1;
       _setConnected(true);
+      _connectedCompleter?.complete();
+      _connectedCompleter = null;
       unawaited(_syncAfterReconnect());
       return;
     }
@@ -227,6 +262,8 @@ class RealtimeService {
     _ackTimeoutTimer?.cancel();
     _connecting = false;
     _setConnected(false);
+    _connectedCompleter?.completeError(StateError('reconnecting'));
+    _connectedCompleter = null;
     _subscription?.cancel();
     _subscription = null;
     try {
@@ -300,13 +337,25 @@ class RealtimeService {
     } catch (_) {}
   }
 
-  Future<void> _syncAfterReconnect() async {
+  Future<void> _syncAfterReconnect({bool force = false}) async {
     final sync = onReconnectSync;
     if (sync == null) return;
+
+    if (!force) {
+      final gate = shouldSyncOnConnect;
+      if (gate != null && !gate()) return;
+      final last = _lastSyncAt;
+      if (last != null &&
+          DateTime.now().difference(last) < const Duration(seconds: 3)) {
+        return;
+      }
+    }
+
     try {
       await sync();
+      markSyncCompleted();
     } catch (_) {
-      // Sync silencioso; el fallback REST reintentará.
+      // Sync silencioso; reconexión reintentará.
     }
   }
 }

@@ -62,7 +62,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _connectivitySub = connectivityService.onlineState.listen((online) {
       if (!mounted) return;
       setState(() {});
-      if (online) unawaited(_refresh(silent: true));
+      if (online) unawaited(AppServices.onAppResumed());
     });
     _messagesSub = _messageRepo
         .watchMessages(widget.conversation.id)

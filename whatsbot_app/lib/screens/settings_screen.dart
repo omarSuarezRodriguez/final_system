@@ -43,7 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _logout() async {
-    AppServices.stopForegroundFallback();
+    AppServices.resetSessionFlags();
     await realtimeService.disconnect();
     await pushService.unregisterOnLogout();
     await AppServices.clearLocalData();

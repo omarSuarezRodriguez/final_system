@@ -37,6 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _businessController.text.trim(),
         _pinController.text,
       );
+      AppServices.resetSessionFlags();
       messageAlerts.seedFromLogin();
       await pushService.registerAfterLogin();
       await AppServices.startRealtimeSession();
