@@ -3,8 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:whatsbot_app/di/app_services.dart';
 import 'package:whatsbot_app/models/conversation.dart';
 import 'package:whatsbot_app/models/message.dart';
+import 'package:whatsbot_app/models/realtime_event.dart';
 import 'package:whatsbot_app/screens/chat_screen.dart';
+import 'package:whatsbot_app/widgets/message_bubble.dart';
 
+import '../helpers/realtime_test_helper.dart';
 import '../helpers/test_app_services.dart';
 
 void main() {
@@ -26,10 +29,8 @@ void main() {
     );
   }
 
-  testWidgets('ChatScreen muestra mensajes desde SQLite', (
-    WidgetTester tester,
-  ) async {
-    final messages = [
+  List<ChatMessage> sampleMessages() {
+    return [
       ChatMessage(
         id: 1,
         conversationId: 1,
@@ -53,19 +54,40 @@ void main() {
         createdAt: DateTime.utc(2026, 6, 5, 10, 29),
       ),
     ];
-    for (final message in messages) {
+  }
+
+  Future<void> seedMessages([List<ChatMessage>? messages]) async {
+    for (final message in messages ?? sampleMessages()) {
       await AppServices.messageRepository.upsertMessage(message);
+    }
+  }
+
+  Future<void> pumpChatScreen(
+    WidgetTester tester, {
+    List<ChatMessage>? initialMessages,
+    bool fromSqliteOnly = false,
+    bool seedSqlite = false,
+  }) async {
+    final messages = initialMessages ?? sampleMessages();
+    if (fromSqliteOnly || seedSqlite) {
+      await seedMessages(messages);
     }
 
     await tester.pumpWidget(
       MaterialApp(
         home: ChatScreen(
           conversation: conversation(),
-          initialMessages: messages,
+          initialMessages: fromSqliteOnly ? null : initialMessages,
         ),
       ),
     );
     await tester.pump();
+  }
+
+  testWidgets('ChatScreen muestra mensajes desde SQLite', (
+    WidgetTester tester,
+  ) async {
+    await pumpChatScreen(tester, fromSqliteOnly: true);
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(find.text('Hola desde el cliente'), findsOneWidget);
@@ -75,25 +97,148 @@ void main() {
     await disposeWidgetTree(tester);
   });
 
-  testWidgets('ChatScreen muestra burbuja al enviar mensaje como admin', (
+  testWidgets(
+    'ChatScreen con initialMessages muestra el último mensaje en el primer frame (v1.16)',
+    (WidgetTester tester) async {
+      final messages = sampleMessages();
+      await seedMessages(messages);
+
+      await pumpChatScreen(tester, initialMessages: messages);
+
+      expect(find.text('Respuesta del admin'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      final listView = tester.widget<ListView>(find.byType(ListView));
+      expect(listView.reverse, isTrue);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets(
+    'ChatScreen con caché SQLite no muestra spinner superpuesto (v1.16)',
+    (WidgetTester tester) async {
+      await pumpChatScreen(tester, fromSqliteOnly: true);
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('Respuesta del admin'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets(
+    'ChatScreen ordena mensajes con mismo createdAt por id estable (v1.18)',
+    (WidgetTester tester) async {
+      final sameTime = DateTime.utc(2026, 6, 5, 12);
+      final messages = [
+        ChatMessage(
+          id: 10,
+          conversationId: 1,
+          direction: 'incoming',
+          body: 'Primero por id',
+          waId: '+5491111111111',
+          isAdmin: false,
+          channel: 'whatsapp',
+          status: 'delivered',
+          createdAt: sameTime,
+        ),
+        ChatMessage(
+          id: 20,
+          conversationId: 1,
+          direction: 'outgoing',
+          body: 'Segundo por id',
+          waId: '+5491111111111',
+          isAdmin: true,
+          channel: 'whatsapp',
+          status: 'sent',
+          createdAt: sameTime,
+        ),
+        ChatMessage(
+          id: 30,
+          conversationId: 1,
+          direction: 'incoming',
+          body: 'Tercero por id',
+          waId: '+5491111111111',
+          isAdmin: false,
+          channel: 'whatsapp',
+          status: 'delivered',
+          createdAt: sameTime,
+        ),
+      ];
+
+      await seedMessages(messages);
+      await pumpChatScreen(tester, initialMessages: messages);
+
+      final bubbles = tester
+          .widgetList<MessageBubble>(find.byType(MessageBubble))
+          .map((bubble) => bubble.message.id)
+          .toList();
+
+      expect(bubbles, [30, 20, 10]);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets(
+    'ChatScreen muestra mensaje entrante en vivo sin reabrir (v1.17)',
+    (WidgetTester tester) async {
+      await pumpChatScreen(tester, initialMessages: const []);
+
+      expect(find.text('Mensaje en vivo'), findsNothing);
+
+      await emitRealtimeEvent(
+        RealtimeEvent(
+          type: 'message.new',
+          message: ChatMessage(
+            id: 501,
+            conversationId: 1,
+            direction: 'incoming',
+            body: 'Mensaje en vivo',
+            waId: '+5491111111111',
+            isAdmin: false,
+            channel: 'whatsapp',
+            status: 'delivered',
+            createdAt: DateTime.utc(2026, 6, 5, 12, 30),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('Mensaje en vivo'), findsOneWidget);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets('ChatScreen muestra burbuja optimista al enviar sin duplicar', (
     WidgetTester tester,
   ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ChatScreen(
-          conversation: conversation(),
-          initialMessages: const [],
-        ),
-      ),
-    );
-    await tester.pump();
+    await pumpChatScreen(tester, initialMessages: const []);
 
     await tester.enterText(find.byType(TextField), 'Mensaje de prueba');
     await tester.tap(find.byIcon(Icons.send));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Mensaje de prueba'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('Mensaje de prueba'), findsOneWidget);
+
+    await disposeWidgetTree(tester);
+  });
+
+  testWidgets('ChatScreen usa TextCapitalization.sentences en el TextField', (
+    WidgetTester tester,
+  ) async {
+    await pumpChatScreen(tester, initialMessages: const []);
+
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.textCapitalization, TextCapitalization.sentences);
 
     await disposeWidgetTree(tester);
   });

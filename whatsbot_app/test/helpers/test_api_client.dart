@@ -11,6 +11,7 @@ import 'package:whatsbot_app/services/api_client.dart';
 class TestApiClient {
   TestApiClient({
     this.failSend = false,
+    this.failConversations = false,
     List<Map<String, dynamic>>? conversations,
     Map<int, List<Map<String, dynamic>>>? messagesByConversation,
   })  : conversations = List<Map<String, dynamic>>.from(conversations ?? []),
@@ -19,11 +20,13 @@ class TestApiClient {
         );
 
   bool failSend;
+  bool failConversations;
   final List<Map<String, dynamic>> conversations;
   final Map<int, List<Map<String, dynamic>>> messagesByConversation;
   int _nextMessageId = 1000;
 
-  late final ApiClient client = ApiClient(httpClient: _buildMockClient());
+  late final MockClient mockHttp = _buildMockClient();
+  late final ApiClient client = ApiClient(httpClient: mockHttp);
 
   Future<void> login() async {
     TestWidgetsFlutterBinding.ensureInitialized();
@@ -49,11 +52,25 @@ class TestApiClient {
       }
 
       if (path.endsWith('/whatsbot/conversations') && request.method == 'GET') {
+        if (failConversations) {
+          return http.Response(
+            jsonEncode({'detail': 'Error de API simulado'}),
+            503,
+            headers: {'content-type': 'application/json'},
+          );
+        }
         return http.Response(
           jsonEncode(conversations),
           200,
           headers: {'content-type': 'application/json'},
         );
+      }
+
+      final readMatch = RegExp(
+        r'/whatsbot/conversations/(\d+)/mark-read$',
+      ).firstMatch(path);
+      if (readMatch != null && request.method == 'POST') {
+        return http.Response('', 204);
       }
 
       final messagesMatch = RegExp(

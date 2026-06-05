@@ -30,6 +30,9 @@ class RealtimeService {
   bool _connected = false;
   int _backoffSeconds = 1;
 
+  /// Evita abrir WebSocket real en widget tests.
+  bool disableSocketForTesting = false;
+
   /// Sync incremental al reconectar (delegado a SyncEngine).
   Future<void> Function()? onReconnectSync;
 
@@ -43,7 +46,7 @@ class RealtimeService {
   bool get isConnected => _connected;
 
   Future<void> connect() async {
-    if (!apiClient.isLoggedIn) return;
+    if (!apiClient.isLoggedIn || disableSocketForTesting) return;
     _intentionalDisconnect = false;
     _reconnectTimer?.cancel();
     await _openSocket();
@@ -142,20 +145,27 @@ class RealtimeService {
   }
 
   void _emitAfterPersist(RealtimeEvent event) {
+    unawaited(emitAfterPersist(event));
+  }
+
+  /// Persiste en SQLite (si hay handler) y emite a listeners de UI.
+  Future<void> emitAfterPersist(RealtimeEvent event) async {
     final persist = persistEvent;
     if (persist == null) {
-      _events.add(event);
+      if (!_events.isClosed) _events.add(event);
       return;
     }
 
-    unawaited(
-      persist(event).then((_) {
-        if (!_events.isClosed) _events.add(event);
-      }).catchError((_) {
-        if (!_events.isClosed) _events.add(event);
-      }),
-    );
+    try {
+      await persist(event);
+    } catch (_) {
+      // Igual que producción: la UI recibe el evento aunque falle SQLite.
+    }
+    if (!_events.isClosed) _events.add(event);
   }
+
+  /// Emula un frame WS en tests (misma ruta que `_onData`).
+  Future<void> debugEmitEvent(RealtimeEvent event) => emitAfterPersist(event);
 
   void _handleDisconnect() {
     _connecting = false;

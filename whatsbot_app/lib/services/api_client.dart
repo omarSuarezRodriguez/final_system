@@ -24,7 +24,12 @@ class ApiException implements Exception {
 class ApiClient {
   ApiClient({http.Client? httpClient}) : _http = httpClient ?? http.Client();
 
-  final http.Client _http;
+  http.Client _http;
+
+  /// Sustituye el cliente HTTP (solo tests widget/integration).
+  void replaceHttpClient(http.Client client) {
+    _http = client;
+  }
   String? _token;
   String? businessId;
   String? businessName;

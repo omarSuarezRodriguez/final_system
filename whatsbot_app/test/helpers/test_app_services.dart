@@ -6,6 +6,7 @@ import 'package:whatsbot_app/data/repositories/chat_repository.dart';
 import 'package:whatsbot_app/data/repositories/message_repository.dart';
 import 'package:whatsbot_app/data/sync/sync_engine.dart';
 import 'package:whatsbot_app/di/app_services.dart';
+import 'package:whatsbot_app/services/api_client.dart';
 import 'package:whatsbot_app/services/realtime_service.dart';
 
 import 'test_api_client.dart';
@@ -13,13 +14,16 @@ import 'test_api_client.dart';
 /// Arranca AppServices con SQLite en memoria y API mock para widget tests.
 Future<TestApiClient> setUpTestAppServices() async {
   TestWidgetsFlutterBinding.ensureInitialized();
+  realtimeService.disableSocketForTesting = true;
   final testApi = TestApiClient();
+  apiClient.replaceHttpClient(testApi.mockHttp);
   await testApi.login();
+  await apiClient.login('default', 'pin');
 
   final db = AppDatabase.forTesting(NativeDatabase.memory());
   AppServices.database = db;
-  AppServices.chatRepository = ChatRepository(db, testApi.client);
-  AppServices.messageRepository = MessageRepository(db, testApi.client);
+  AppServices.chatRepository = ChatRepository(db, apiClient);
+  AppServices.messageRepository = MessageRepository(db, apiClient);
   AppServices.syncEngine = SyncEngine(
     AppServices.chatRepository,
     AppServices.messageRepository,
@@ -33,7 +37,12 @@ Future<TestApiClient> setUpTestAppServices() async {
 
 Future<void> tearDownTestAppServices() async {
   await realtimeService.disconnect();
-  await AppServices.database.close();
+  realtimeService.disableSocketForTesting = false;
+  if (AppServices.isInitialized) {
+    try {
+      await AppServices.database.close();
+    } catch (_) {}
+  }
 }
 
 /// Cierra pantallas y drena timers de Drift/WS antes del dispose del test.
@@ -41,5 +50,8 @@ Future<void> disposeWidgetTree(WidgetTester tester) async {
   await realtimeService.disconnect();
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 50));
+  await tester.pump(const Duration(milliseconds: 100));
+  try {
+    await AppServices.database.close();
+  } catch (_) {}
 }

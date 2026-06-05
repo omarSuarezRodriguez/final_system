@@ -1,4 +1,4 @@
-## v1.18
+## v1.20
 
 
 
@@ -2789,5 +2789,7 @@ Nota breve añadida en `docs/INCREMENTAL_GUIDE.md` (sección OF-E). No se tocó 
 
 
 ##############################################
+## v1.19
+
 
 
