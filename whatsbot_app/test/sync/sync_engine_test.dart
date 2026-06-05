@@ -193,6 +193,62 @@ void main() {
     expect(stored.single.id, 10);
   });
 
+  test('handleRealtimeEvent dispara onIncomingMessage para entrantes', () async {
+    Conversation? notifiedConv;
+    ChatMessage? notifiedMsg;
+    engine.onIncomingMessage = (conv, msg) async {
+      notifiedConv = conv;
+      notifiedMsg = msg;
+    };
+
+    final event = RealtimeEvent(
+      type: 'message.new',
+      message: ChatMessage(
+        id: 88,
+        conversationId: 1,
+        direction: 'incoming',
+        body: 'Alerta entrante',
+        waId: '+5491111111111',
+        isAdmin: false,
+        channel: 'whatsapp',
+        status: 'delivered',
+        createdAt: DateTime.utc(2026, 6, 5, 15),
+      ),
+    );
+
+    await engine.handleRealtimeEvent(event);
+
+    expect(notifiedConv?.id, 1);
+    expect(notifiedMsg?.id, 88);
+    expect(notifiedMsg?.body, 'Alerta entrante');
+  });
+
+  test('handleRealtimeEvent no dispara onIncomingMessage para salientes', () async {
+    var called = false;
+    engine.onIncomingMessage = (_, __) async {
+      called = true;
+    };
+
+    await engine.handleRealtimeEvent(
+      RealtimeEvent(
+        type: 'message.new',
+        message: ChatMessage(
+          id: 89,
+          conversationId: 1,
+          direction: 'outgoing',
+          body: 'Admin',
+          waId: '+5491111111111',
+          isAdmin: true,
+          channel: 'whatsapp',
+          status: 'sent',
+          createdAt: DateTime.utc(2026, 6, 5, 15),
+        ),
+      ),
+    );
+
+    expect(called, isFalse);
+  });
+
   test('syncOnReconnect vacía cola saliente pendiente', () async {
     testApi.failSend = true;
     await messages.sendMessage(

@@ -209,6 +209,9 @@ class MessageAlertsService {
           conv.id,
           at: conv.lastSeenAt ?? conv.lastMessageAt,
         );
+        if (AppServices.isInitialized) {
+          unawaited(_seedMaxMessageId(conv.id));
+        }
       }
       _seeded = true;
       return;
@@ -253,6 +256,18 @@ class MessageAlertsService {
     _maxMessageIdByConversation.clear();
     _lastMessageAtByConversation.clear();
     _lastSeenAtByConversation.clear();
+  }
+
+  Future<void> _seedMaxMessageId(int conversationId) async {
+    try {
+      final cached =
+          await AppServices.messageRepository.getCachedMessages(conversationId);
+      if (cached.isEmpty) return;
+      final maxId = cached.map((m) => m.id).reduce((a, b) => a > b ? a : b);
+      if (maxId > 0) {
+        _maxMessageIdByConversation[conversationId] = maxId;
+      }
+    } catch (_) {}
   }
 
   Future<void> _notifyIncoming({

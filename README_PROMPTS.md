@@ -1,4 +1,4 @@
-## v1.26
+## v1.27
 
 
 
@@ -3427,4 +3427,58 @@ Si no ves cambios, para la app y vuelve a ejecutar `flutter run` (rebuild comple
 #######################################
 ## v1.26
 
+
+## prompt ##
+
+Cuando envío un mensaje desde un chat de whatsbot hacia un cliente, en la ventana del chat no se muestra cuando yo lo envío, por ejemplo escribo "hola" y el hola lo recibe el cliente (tengo acceso a su whatsapp), pero en lwhatsapp, si el admin envía, no se actualiza el chat, solamente cargan una vez abro la app con el login pero no vuelven a cargar, has que el login cargue las conversaciones y las deje guardadas y el resto se van añadiendo de forma incremental, sin tener que estar consultando a cada rato, y revisa que el flujo sea correcto, implementa el mismo funcionamiento de chat que de whatsapp, has analisis del chat de whatsapp, osea la forma en que funciona la app, analisis y lo aplicas
+
+
+
+## resp cursor ##
+
+He analizado y corregido el flujo del chat para que funcione como WhatsApp: **SQLite local como fuente de verdad**, actualizaciones incrementales y tiempo real por WebSocket (sin polling).
+
+## Qué estaba fallando
+
+El mensaje **sí llegaba al cliente** (Twilio/API funcionaba), pero en la app no se veía por dos causas principales:
+
+1. **Doble capa de mensajes optimistas** — La UI y el repositorio creaban burbujas por separado, con lógica de reconciliación frágil.
+2. **`conversation_id` distinto** — El servidor canonicaliza el `wa_id` (`+54911…` vs `54911…`) y devuelve otro `conversation_id`. El mensaje se guardaba en SQLite bajo el ID equivocado, y `watchMessages(convId)` no lo emitía.
+
+## Cómo funciona ahora (patrón WhatsApp)
+
+```
+Login → carga conversaciones en SQLite → lista instantánea desde caché
+Abrir chat → mensajes desde SQLite → sync incremental solo si hace falta
+Enviar → escribe optimista en SQLite → stream Drift actualiza UI al instante → API confirma
+Recibir (WS) → persiste en SQLite → stream actualiza lista y chat
+Sin polling — solo WS + sync al reconectar + pull-to-refresh manual
+```
+
+## Cambios implementados
+
+| Área | Cambio |
+|------|--------|
+| **ChatScreen** | Envío stream-first: un solo writer (repositorio). UI reacciona al stream Drift. Matching por `wa_id` además de `conversation_id`. |
+| **MessageRepository** | Resuelve el hilo local por `wa_id`/`clientUuid` aunque el servidor use otro `conversation_id`. |
+| **SyncEngine / ChatRepository** | Buscan conversación por `wa_id` para bumps y alertas. |
+| **Backend WS** | Incluye `client_id` en eventos `message.new` para deduplicación correcta. |
+| **Login / Splash** | `await hydrateAfterLogin()` — carga y guarda conversaciones antes de mostrar la lista. |
+
+## Para probar en tu teléfono
+
+La app tiene `flutter run` activo. Haz **hot restart** (tecla `R` en la terminal, no hot reload) para cargar los cambios:
+
+1. Cierra sesión y vuelve a entrar — deberías ver las conversaciones cargadas y guardadas.
+2. Abre un chat y envía "hola" — debe aparecer al instante en la burbuja verde.
+3. Pide al cliente que responda — debe aparecer sin reabrir el chat.
+4. Si ves el icono de nube tachada en la barra, el WebSocket no está conectado (revisa que `api_config.dart` apunte a tu ngrok activo).
+
+Si tras el restart sigue sin actualizar, dime si ves el icono offline y te ayudo a revisar la conexión WebSocket.
+
+
+
+
+
+#######################################
 

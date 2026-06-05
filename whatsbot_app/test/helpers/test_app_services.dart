@@ -6,7 +6,10 @@ import 'package:whatsbot_app/data/repositories/chat_repository.dart';
 import 'package:whatsbot_app/data/repositories/message_repository.dart';
 import 'package:whatsbot_app/data/sync/sync_engine.dart';
 import 'package:whatsbot_app/di/app_services.dart';
+import 'package:whatsbot_app/models/conversation.dart';
+import 'package:whatsbot_app/models/message.dart';
 import 'package:whatsbot_app/services/api_client.dart';
+import 'package:whatsbot_app/services/message_alerts_service.dart';
 import 'package:whatsbot_app/services/realtime_service.dart';
 
 import 'test_api_client.dart';
@@ -30,6 +33,15 @@ Future<TestApiClient> setUpTestAppServices() async {
   );
   realtimeService.onReconnectSync = AppServices.syncEngine.syncOnReconnect;
   realtimeService.persistEvent = AppServices.syncEngine.handleRealtimeEvent;
+  AppServices.syncEngine.onIncomingMessage = (
+    Conversation conversation,
+    ChatMessage message,
+  ) {
+    return messageAlerts.handleRealtimeMessage(
+      conversation: conversation,
+      message: message,
+    );
+  };
 
   await realtimeService.disconnect();
   return testApi;

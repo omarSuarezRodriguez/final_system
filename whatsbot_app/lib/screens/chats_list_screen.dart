@@ -67,23 +67,8 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     final message = event.message;
     if (message == null) return;
 
-    // sync_engine ya persistió el bump; salientes reordenan vía Drift watch.
-    if (message.isOutgoing) {
-      if (mounted) setState(() {});
-      return;
-    }
-
-    final conversation = event.conversation ??
-        await _chats.getConversation(message.conversationId) ??
-        await _chats.findConversationByWaId(message.waId);
-    if (conversation == null) return;
-
-    unawaited(
-      messageAlerts.handleRealtimeMessage(
-        conversation: conversation,
-        message: message,
-      ),
-    );
+    // SyncEngine ya persistió, notificó y Drift reordena; refrescar badges/preview.
+    if (mounted) setState(() {});
   }
 
   Future<void> _openChat(Conversation chat) async {

@@ -219,18 +219,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'message.new':
         final message = event.message;
         if (message == null || !_messageBelongsToChat(message)) break;
-        // SyncEngine ya persistió en SQLite; el stream Drift actualiza la UI.
+        // SyncEngine persiste y dispara alertas; Drift stream actualiza burbujas.
         _onMessagesUpdated(_displayMessages);
         unawaited(_markRead());
-        if (_displayMessages.isNotEmpty) {
-          unawaited(
-            messageAlerts.handleChatMessages(
-              conversationId: widget.conversation.id,
-              displayName: widget.conversation.displayName,
-              messages: _displayMessages,
-            ),
-          );
-        }
         break;
       case 'conversation.updated':
       case 'conversation.sync':

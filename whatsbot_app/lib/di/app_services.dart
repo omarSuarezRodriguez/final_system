@@ -2,8 +2,11 @@ import '../data/local/app_database.dart';
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
 import '../data/sync/sync_engine.dart';
+import '../models/conversation.dart';
+import '../models/message.dart';
 import '../services/api_client.dart';
 import '../services/connectivity_service.dart';
+import '../services/message_alerts_service.dart';
 import '../services/realtime_service.dart';
 
 /// Inicialización de DB local, repositorios y motor de sync (OF-A / OF-B / OF-D).
@@ -34,6 +37,17 @@ class AppServices {
   static void _wireRealtime() {
     realtimeService.onReconnectSync = syncEngine.syncOnReconnect;
     realtimeService.persistEvent = syncEngine.handleRealtimeEvent;
+    syncEngine.onIncomingMessage = _onIncomingMessage;
+  }
+
+  static Future<void> _onIncomingMessage(
+    Conversation conversation,
+    ChatMessage message,
+  ) {
+    return messageAlerts.handleRealtimeMessage(
+      conversation: conversation,
+      message: message,
+    );
   }
 
   static void _wireConnectivity() {
