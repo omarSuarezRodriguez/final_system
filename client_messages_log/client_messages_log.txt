@@ -1,0 +1,50 @@
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: hola
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: que tal como estás
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Todo vientos
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: bacanería
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
