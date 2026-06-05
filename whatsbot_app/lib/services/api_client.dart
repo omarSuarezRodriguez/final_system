@@ -163,6 +163,12 @@ class ApiClient {
     );
     _ensureOk(response);
     final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (data['ok'] != true) {
+      throw ApiException(
+        data['message'] as String? ?? 'No se pudo confirmar el pedido',
+        statusCode: response.statusCode,
+      );
+    }
     return data['message'] as String? ?? 'Pedido aprobado';
   }
 

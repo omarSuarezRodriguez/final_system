@@ -13,6 +13,7 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outgoing = message.isOutgoing;
+    final isBotReply = outgoing && !message.isAdmin;
     final time = DateFormat('HH:mm').format(message.createdAt.toLocal());
 
     return Align(
@@ -25,7 +26,9 @@ class MessageBubble extends StatelessWidget {
         ),
         decoration: BoxDecoration(
           color: outgoing
-              ? WhatsAppTheme.outgoingBubble
+              ? (isBotReply
+                  ? const Color(0xFFE7F6E1)
+                  : WhatsAppTheme.outgoingBubble)
               : WhatsAppTheme.incomingBubble,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(8),
@@ -44,6 +47,20 @@ class MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            if (isBotReply) ...[
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'WhatsBot',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: WhatsAppTheme.accentGreen.withValues(alpha: 0.9),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+            ],
             Text(
               message.body,
               style: const TextStyle(fontSize: 15, height: 1.35),

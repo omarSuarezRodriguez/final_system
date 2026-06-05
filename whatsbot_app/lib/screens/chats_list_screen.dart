@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../config/api_config.dart';
 import '../models/conversation.dart';
+import '../models/message.dart';
 import '../models/realtime_event.dart';
 import '../main.dart';
 import '../services/api_client.dart';
@@ -69,13 +70,23 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
         final message = event.message;
         final conversation = event.conversation;
         if (message != null && conversation != null) {
-          _upsertConversation(conversation);
+          _upsertConversation(_mergeConversationWithMessage(conversation, message));
           unawaited(
             messageAlerts.handleRealtimeMessage(
               conversation: conversation,
               message: message,
             ),
           );
+        } else if (message != null) {
+          final bumped = _bumpConversationFromMessage(message);
+          if (bumped != null) {
+            unawaited(
+              messageAlerts.handleRealtimeMessage(
+                conversation: bumped,
+                message: message,
+              ),
+            );
+          }
         } else if (conversation != null) {
           _upsertConversation(conversation);
         }
@@ -88,6 +99,38 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
         }
         break;
     }
+  }
+
+  Conversation _mergeConversationWithMessage(
+    Conversation conversation,
+    ChatMessage message,
+  ) {
+    final preview = message.body.length > 80
+        ? '${message.body.substring(0, 77)}...'
+        : message.body;
+    final lastAt = conversation.lastMessageAt;
+    final messageAt = message.createdAt;
+    final newestAt = lastAt == null || messageAt.isAfter(lastAt)
+        ? messageAt
+        : lastAt;
+    return conversation.copyWith(
+      lastMessagePreview: preview,
+      lastMessageAt: newestAt,
+      updatedAt: newestAt,
+    );
+  }
+
+  Conversation? _bumpConversationFromMessage(ChatMessage message) {
+    final index =
+        _conversations.indexWhere((item) => item.id == message.conversationId);
+    if (index < 0) {
+      unawaited(_load(silent: true));
+      return null;
+    }
+    final updated =
+        _mergeConversationWithMessage(_conversations[index], message);
+    _upsertConversation(updated);
+    return updated;
   }
 
   void _upsertConversation(Conversation conversation) {
@@ -109,7 +152,9 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     _conversations.sort((a, b) {
       final aTime = a.lastMessageAt ?? a.updatedAt;
       final bTime = b.lastMessageAt ?? b.updatedAt;
-      return bTime.compareTo(aTime);
+      final byTime = bTime.compareTo(aTime);
+      if (byTime != 0) return byTime;
+      return b.id.compareTo(a.id);
     });
   }
 

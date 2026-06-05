@@ -22,6 +22,23 @@ class Conversation {
           ? customerName!
           : customerWaId;
 
+  Conversation copyWith({
+    String? customerName,
+    String? lastMessagePreview,
+    DateTime? lastMessageAt,
+    DateTime? updatedAt,
+  }) {
+    return Conversation(
+      id: id,
+      businessId: businessId,
+      customerWaId: customerWaId,
+      customerName: customerName ?? this.customerName,
+      lastMessagePreview: lastMessagePreview ?? this.lastMessagePreview,
+      lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
   factory Conversation.fromJson(Map<String, dynamic> json) {
     return Conversation(
       id: json['id'] as int,

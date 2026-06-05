@@ -222,7 +222,15 @@ async def approve_order(
     db: Session = Depends(get_db),
 ) -> OrderActionResponse:
     """Aprueba pedido y notifica al cliente (legacy Sheets + Twilio)."""
-    result = notify_svc.approve_order_from_app(order_id, business_id=business_id)
+    result = notify_svc.approve_order_from_app(
+        order_id,
+        business_id=business_id,
+        db=db,
+    )
+    saved_msg = result.get("saved_message")
+    if saved_msg is not None:
+        db.commit()
+        await emit_message_saved(db, business_id, saved_msg)
     row = order_svc.get_order(db, business_id, order_id.upper().strip())
     if row:
         await emit_order_updated(business_id, row)

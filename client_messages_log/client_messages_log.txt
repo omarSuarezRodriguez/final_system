@@ -769,3 +769,28 @@ Cliente: keke
 Chatbot: No logré entender eso del todo. Puedes reformularlo o usar uno de los comandos disponibles.
 
 #################################################################
+################################################################
+
+Cliente: Hola
+
+
+-------------------------------
+
+Chatbot: Hola *Omar Suarez*, Bienvenido a *La Casa del Sabor*.
+
+¿Deseas repetir tu pedido anterior?
+Responde *sí* o *no*.
+*Nuestro menú*
+
+*Bebidas*
+• Coca-Cola — $5000.00
+
+*Hamburguesas*
+• Hamburguesa de carne — $12500.00
+• Hamburguesa de pollo — $10000.00
+
+¿Deseas hacer un pedido o reservar una mesa?
+
+Escribe *pedido* para ordenar o *reservar* para agendar tu mesa.
+
+#################################################################

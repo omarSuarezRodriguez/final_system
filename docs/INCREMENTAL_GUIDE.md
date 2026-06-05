@@ -345,3 +345,22 @@ cd whatsbot_app && flutter analyze
 ```
 
 **Fase 11 cerrada.** Próximo trabajo fuera de alcance: Redis pub/sub multi-instancia, read receipts Twilio, typing desde cliente WA.
+
+---
+
+## Mejoras UX chat (post-Fase 11) ✅
+
+**Hecho:**
+
+- [x] Aprobar pedido desde app: verifica Twilio, persiste confirmación en chat y emite `message.new`
+- [x] Burbujas: respuestas del bot con etiqueta «WhatsBot»; mensajes del dueño sin marca
+- [x] Lista de chats: reorden al instante vía WS (`message.new`) sin depender solo del polling
+- [x] Al abrir chat: scroll al final con `jumpTo` tras layout (doble post-frame)
+- [x] Leído/no leído: `seenAt` alineado al último mensaje al salir del chat (incluye salientes)
+
+```bash
+cd final_system
+python -m pytest tests/test_order_confirmation_flow.py -v
+python scripts/validate_chatbot.py
+cd whatsbot_app && flutter analyze
+```

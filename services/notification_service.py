@@ -141,11 +141,25 @@ def confirm_order_updates_database(
         logger.exception("confirm_order_updates_database failed for %s", order_id)
 
 
+def _order_dict_from_db_row(row: Any) -> dict[str, Any]:
+    return {
+        "order_id": row.order_id,
+        "wa_id": row.wa_id,
+        "status": row.status,
+        "items": row.items or [],
+        "total": float(row.total or 0),
+        "customer_name": row.customer_name or "",
+        "address": row.address or "",
+        "delivery_type": row.delivery_type or "",
+    }
+
+
 def approve_order_from_app(
     order_id: str,
     *,
     business_id: str | None = None,
-) -> dict[str, str]:
+    db: Any | None = None,
+) -> dict[str, Any]:
     """
     Dueño aprueba desde Flutter: confirma en Sheets (legacy) + BD + avisa cliente.
     """
@@ -153,6 +167,12 @@ def approve_order_from_app(
     bid = (business_id or DEFAULT_BUSINESS_ID or "default").strip()
     admin = _admin_service()
     order = admin.order_service.get_order(oid)
+    if not order and db is not None:
+        from services import order_service as db_orders
+
+        row = db_orders.get_order(db, bid, oid)
+        if row:
+            order = _order_dict_from_db_row(row)
     if not order:
         return {"ok": False, "message": f"No encontré el pedido {oid}."}
     if order.get("status") == "confirmed":
@@ -162,13 +182,44 @@ def approve_order_from_app(
         return {"ok": False, "message": f"No pude confirmar el pedido {oid}."}
     confirm_order_updates_database(oid, business_id=bid, status="confirmed")
     customer = admin._customer_wa_id(order)
-    if customer:
-        body = (
-            f"Tu pedido *{oid}* fue confirmado por el restaurante. "
-            "¡Gracias por tu compra!"
+    if not customer:
+        return {
+            "ok": True,
+            "message": (
+                f"Pedido {oid} confirmado en sistema, "
+                "pero no hay teléfono del cliente para avisarle."
+            ),
+        }
+    body = (
+        f"Tu pedido *{oid}* fue confirmado por el restaurante. "
+        "¡Gracias por tu compra!"
+    )
+    if not admin._send_whatsapp(customer, body):
+        return {
+            "ok": False,
+            "message": (
+                f"Pedido {oid} confirmado en sistema, "
+                "pero no se pudo enviar WhatsApp al cliente."
+            ),
+        }
+    saved_msg = None
+    if db is not None:
+        from services import conversation_service as conv_svc
+
+        saved = conv_svc.save_outgoing_message(
+            db,
+            customer_wa_id=customer,
+            body=body,
+            business_id=bid,
+            is_admin=False,
         )
-        admin._send_whatsapp(customer, body)
-    return {"ok": True, "message": f"Pedido {oid} confirmado."}
+        if saved:
+            saved_msg = saved[-1]
+    return {
+        "ok": True,
+        "message": f"Pedido {oid} confirmado.",
+        "saved_message": saved_msg,
+    }
 
 
 def reject_order_from_app(

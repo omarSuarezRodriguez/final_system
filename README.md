@@ -12,7 +12,8 @@ python -m api.main
 
 - **App Flutter: desde final_system:**
 
-cd whatsbot_app; flutter run
+cd whatsbot_app
+flutter run
 
 
 

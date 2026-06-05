@@ -1,4 +1,4 @@
-## v1.9
+## v1.10
 
 
 
@@ -1219,8 +1219,100 @@ python scripts/migrate_db.py
 para inicializar DB
 
 
+##########################################################
+## v1.10
 
-##
+## prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+
+MEJORA: [
+    
+Te voy a pasar una serie de mejoras y quiero que me des un breve resumen al final de cada una y verifica que funcione correctamente.
+1. Cuando se confirma pedido por parte del admin del restaurante, el cliente no recibe la confirmación de parte del bot, arregla eso
+2. Cuando el admin chatea con el bot, todos los chats se mandan como si fueran del bot (desde WhatsBot) la idea es que se vea como una comunicación normal
+3. Cuando un mensaje nuevo llega, el último mensaje del último chat debería ponerse de primero como en whatsapp, no? osea que no esté revisando constantemente sino que cuando sepa que llegó, ya sabe que tiene que acomodarlo de primero
+
+4.Cuando entro a un chat, debería iniciar en el final, algunas no inician al final del chat y hay que dealizar para bajar al final, arregla eso
+
+5. Cuando entro a un chat y salgo, me muestra como si no lo hubiera leido, verifica bien el tema de chats leidos y no y verifica que funcione correctamente
+
+]
+
+REGLAS:
+- Cambio mínimo; no tocar lógica de chatbot/gateway ni intents
+- UI solo Flutter (whatsbot_app/)
+- Si toca API: validate_system.py + pytest
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+- validate_chatbot.py al final si tocaste backend
+
+
+
+## resp cursor ##
+
+
+Implementé las 5 mejoras. Resumen breve de cada una:
+
+---
+
+### 1. Confirmación de pedido al cliente
+**Problema:** Al aprobar desde la app, el WhatsApp al cliente podía fallar en silencio y la confirmación no quedaba en el historial del chat.
+
+**Arreglo (backend):** `approve_order_from_app` ahora verifica el resultado de Twilio, devuelve `ok: false` si falla, guarda el mensaje en BD y emite `message.new`. La app solo limpia el pedido pendiente si `ok: true`.
+
+**Verificado:** 5/5 tests en `test_order_confirmation_flow.py` + `validate_chatbot.py` OK.
+
+---
+
+### 2. Mensajes del admin vs. del bot
+**Problema:** Todos los mensajes salientes se veían iguales, como si fueran del bot.
+
+**Arreglo (Flutter):** Las respuestas automáticas del bot muestran etiqueta «WhatsBot» y burbuja distinta; los mensajes del dueño (`is_admin=true`) se ven como chat normal, con ticks de estado.
+
+**Verificado:** `flutter analyze` sin errores.
+
+---
+
+### 3. Reorden de chats al llegar mensaje
+**Problema:** El chat con mensaje nuevo no subía al tope de forma fiable.
+
+**Arreglo (Flutter):** En `message.new` por WebSocket se actualiza preview/timestamp y se reordena al instante, sin esperar al polling. Si falta la conversación en memoria, se hace fetch silencioso.
+
+**Verificado:** Lógica en `chats_list_screen.dart` con `_mergeConversationWithMessage` + `_sortConversations`.
+
+---
+
+### 4. Scroll al final al abrir chat
+**Problema:** Algunos chats no iniciaban abajo; había que deslizar manualmente.
+
+**Arreglo (Flutter):** Primera carga usa `jumpTo` con doble `postFrameCallback` (tras el layout del `ListView`). El polling silencioso ya no fuerza scroll si no estás cerca del final.
+
+**Verificado:** `flutter analyze` OK.
+
+---
+
+### 5. Leído / no leído al salir del chat
+**Problema:** Al entrar y salir, el chat volvía a marcarse como no leído (mensajes salientes actualizaban `lastMessageAt` pero `seenAt` quedaba desfasado).
+
+**Arreglo (Flutter):** `seenAt` se alinea al timestamp del último mensaje al cargar, al recibir mensajes y al salir del chat (`dispose`). Ya no se marca como leído solo con `DateTime.now()` al entrar.
+
+**Verificado:** `flutter analyze` OK.
+
+---
+
+**Validaciones ejecutadas:**
+- `pytest tests/test_order_confirmation_flow.py` → 5 passed
+- `python scripts/validate_chatbot.py` → 0 fallos
+- `flutter analyze lib/` → sin issues
+
+Nota documentada en `docs/INCREMENTAL_GUIDE.md`. Para probar en el dispositivo con `flutter run --release` que ya tienes corriendo, haz hot restart o rebuild para cargar los cambios.
+
+
+
+
+##########################################################
 
 
 

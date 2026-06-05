@@ -33,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _orderBusy = false;
   bool _peerTyping = false;
+  bool _didInitialScroll = false;
   Timer? _fallbackTimer;
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
@@ -58,6 +59,7 @@ class _ChatScreenState extends State<ChatScreen> {
       conversationId: widget.conversation.id,
       isTyping: false,
     );
+    _markConversationSeenLocally();
     messageAlerts.setActiveConversation(null);
     _inputController.removeListener(_onInputChanged);
     _realtimeSub?.cancel();
@@ -69,10 +71,26 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+  DateTime? _latestActivityAt() {
+    if (_messages.isNotEmpty) {
+      return _messages
+          .map((m) => m.createdAt)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+    }
+    return widget.conversation.lastMessageAt;
+  }
+
+  void _markConversationSeenLocally() {
+    final lastAt = _latestActivityAt();
+    if (lastAt != null) {
+      messageAlerts.markConversationSeen(widget.conversation.id, at: lastAt);
+    }
+  }
+
   Future<void> _markRead() async {
     try {
       await apiClient.markConversationRead(widget.conversation.id);
-      messageAlerts.markConversationSeen(widget.conversation.id);
+      _markConversationSeenLocally();
     } catch (_) {}
   }
 
@@ -167,7 +185,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages = [..._messages, message];
       _loading = false;
     });
-    _scrollToBottom();
+    _markConversationSeenLocally();
+    _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
   }
 
   Future<void> _refresh({bool silent = false}) async {
@@ -204,7 +223,8 @@ class _ChatScreenState extends State<ChatScreen> {
         displayName: widget.conversation.displayName,
         messages: _messages,
       );
-      _scrollToBottom();
+      _markConversationSeenLocally();
+      _scrollToBottom(force: !silent || !_didInitialScroll);
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -228,14 +248,29 @@ class _ChatScreenState extends State<ChatScreen> {
     return na == nb || na.endsWith(nb) || nb.endsWith(na);
   }
 
-  void _scrollToBottom() {
+  bool _isNearBottom() {
+    if (!_scrollController.hasClients) return true;
+    final max = _scrollController.position.maxScrollExtent;
+    return _scrollController.offset >= max - 96;
+  }
+
+  void _scrollToBottom({bool force = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeOut,
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scrollController.hasClients) return;
+        final max = _scrollController.position.maxScrollExtent;
+        if (!force && !_isNearBottom()) return;
+        if (force && !_didInitialScroll) {
+          _scrollController.jumpTo(max);
+          _didInitialScroll = true;
+          return;
+        }
+        _scrollController.animateTo(
+          max,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      });
     });
   }
 

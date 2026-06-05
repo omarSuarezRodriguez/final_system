@@ -99,9 +99,6 @@ class MessageAlertsService {
 
   void setActiveConversation(int? conversationId) {
     _activeConversationId = conversationId;
-    if (conversationId != null) {
-      _lastSeenAtByConversation[conversationId] = DateTime.now();
-    }
   }
 
   void markConversationSeen(int conversationId, {DateTime? at}) {
@@ -145,7 +142,10 @@ class MessageAlertsService {
     );
 
     if (_activeConversationId == conversationId && _appInForeground) {
-      markConversationSeen(conversationId, at: conversation.lastMessageAt);
+      markConversationSeen(
+        conversationId,
+        at: conversation.lastMessageAt ?? message.createdAt,
+      );
     }
   }
 
@@ -161,7 +161,10 @@ class MessageAlertsService {
 
     if (prevMax == null) {
       _maxMessageIdByConversation[conversationId] = maxId;
-      markConversationSeen(conversationId);
+      final latestAt = messages
+          .map((m) => m.createdAt)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      markConversationSeen(conversationId, at: latestAt);
       _seeded = true;
       return;
     }
@@ -183,7 +186,10 @@ class MessageAlertsService {
     }
 
     if (_activeConversationId == conversationId && _appInForeground) {
-      markConversationSeen(conversationId);
+      final latestAt = messages
+          .map((m) => m.createdAt)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      markConversationSeen(conversationId, at: latestAt);
     }
   }
 

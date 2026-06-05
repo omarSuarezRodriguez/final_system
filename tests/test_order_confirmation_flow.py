@@ -100,6 +100,59 @@ def test_admin_confirm_notifies_customer(whatsapp_log):
     assert customer_notified, f"Expected customer WhatsApp in {whatsapp_log}"
 
 
+def test_approve_from_app_notifies_customer(whatsapp_log):
+    from app.integrations.google_sheets import GoogleSheetsClient
+    from chatbot.runtime import get_bot_context
+    from services import notification_service as notify
+
+    ctx = get_bot_context(start_background=False)
+    sheets: GoogleSheetsClient = ctx.admin_service.sheets
+    order_id = sheets.create_order(
+        wa_id="573004445566",
+        items=[{"nombre": "Tacos", "qty": 2, "subtotal": 8.0}],
+        total=8.0,
+        status="pending",
+        customer_name="Cliente App",
+    )
+
+    result = notify.approve_order_from_app(order_id, business_id="default")
+
+    assert result["ok"] is True
+    assert sheets.get_order(order_id)["status"] == "confirmed"
+    assert any(
+        "573004445566" in to.replace("whatsapp:", "").replace("+", "")
+        for to, body in whatsapp_log
+        if "confirmado" in body.lower()
+    ), f"Expected customer WhatsApp in {whatsapp_log}"
+
+
+def test_approve_from_app_reports_twilio_failure(whatsapp_log):
+    from app.integrations.google_sheets import GoogleSheetsClient
+    from chatbot.runtime import get_bot_context
+    from services import notification_service as notify
+
+    ctx = get_bot_context(start_background=False)
+    sheets: GoogleSheetsClient = ctx.admin_service.sheets
+    order_id = sheets.create_order(
+        wa_id="573003332211",
+        items=[{"nombre": "Ensalada", "qty": 1, "subtotal": 5.0}],
+        total=5.0,
+        status="pending",
+    )
+
+    def _fail_send(_self, _to: str, _body: str) -> bool:
+        return False
+
+    with patch(
+        "app.services.admin_service.AdminService._send_whatsapp",
+        _fail_send,
+    ):
+        result = notify.approve_order_from_app(order_id, business_id="default")
+
+    assert result["ok"] is False
+    assert sheets.get_order(order_id)["status"] == "confirmed"
+
+
 def test_full_flow_via_gateway(whatsapp_log):
     """Simula: cliente guarda pedido (notify) + admin confirma (gateway)."""
     from app.integrations.google_sheets import GoogleSheetsClient
