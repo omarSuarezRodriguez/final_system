@@ -550,7 +550,6 @@ Entregables:
 @PROMPT_EVOLUCION_SAAS_WHATSBOT.md
 @docs/INCREMENTAL_GUIDE.md
 
-Sistema en final_system/ con Fase 11 cerrada (WS + FCM opcional).
 
 MEJORA: [una frase concreta]
 

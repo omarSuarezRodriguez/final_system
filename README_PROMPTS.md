@@ -1,4 +1,4 @@
-## v1.12
+## v1.13
 
 
 
@@ -1923,3 +1923,9 @@ La app WhatsBot queda **offline-first**: chats e historial desde SQLite, envío 
 
 
 #############################################
+## v1.13
+
+
+
+
+
