@@ -427,3 +427,14 @@ flutter test
 - Spinner solo si `messages.isEmpty` y no hay datos locales (primera apertura).
 - `SyncEngine.syncMessagesIncremental`: guard con TTL 2 min + cursor (`needsSyncFromApi`); `force: true` al reconectar.
 - Reabrir conversación visitada: sin loading ni re-sync innecesario; actualización solo si hay delta real (WS o TTL).
+
+---
+
+## Chat: apertura fluida sin saltos (reverse ListView) ✅
+
+- `chat_screen.dart`: `ListView.builder(reverse: true)` — offset 0 = último mensaje visible en el primer frame, sin `jumpTo`/`animateTo` en apertura.
+- Índice 0 = mensaje más reciente; `TypingIndicator` en i==0 (extremo inferior).
+- Eliminados `_needsInitialScroll`, `_positionAtBottom` y `addPostFrameCallback` de scroll dentro del `StreamBuilder`.
+- Scroll animado solo vía `_onMessagesUpdated` (listener del stream) si hay mensaje nuevo y `_isNearBottom()`.
+- `chats_list_screen.dart`: precarga SQLite (`getCachedMessages`) antes del `push`; `initialData` en `StreamBuilder`.
+- `initState`: sync/mark-read diferidos con `scheduleFrameCallback` (no bloquean el primer paint).

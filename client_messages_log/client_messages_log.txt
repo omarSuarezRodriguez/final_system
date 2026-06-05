@@ -844,3 +844,43 @@ Cliente: Hola
 Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
 
 #################################################################
+################################################################
+
+Cliente: Ventisca
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Hola que tal cómo vamos
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Sisa
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Keoke
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################

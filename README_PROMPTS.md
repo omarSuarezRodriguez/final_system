@@ -1,4 +1,4 @@
-## v1.15
+## v1.16 Scroll Fix
 
 
 
@@ -2215,4 +2215,377 @@ flutter test    → 11 passed
 
 
 #############################################################
+## v1.16
+
+
+
+
+## prompt ##
+
+# MEJORA: Apertura de chat 100% fluida (cero saltos, como WhatsApp)
+
+## Problema actual (regresión UX)
+Al tocar un chat en la lista:
+1. Hay sensación de "pegado" al abrir (lag en el tap / transición).
+2. Se ve un salto o animación de bajada: primero aparece arriba y luego baja al último mensaje.
+3. No se siente como WhatsApp, donde el chat abre YA al final, sin movimiento visible.
+
+## Diagnóstico (causa raíz — no parchear síntomas)
+- `ListView` normal arranca en offset 0 (arriba); `jumpTo` en postFrameCallback ocurre DESPUÉS del primer paint → salto visible.
+- Lógica de scroll dentro de `build()` via `addPostFrameCallback` se re-ejecuta en cada rebuild del StreamBuilder.
+- `_scrollToBottom(force: true)` usa `animated: true` por defecto en ramas post-apertura.
+- `StreamBuilder` primer frame puede ser `[]` aunque SQLite tenga datos.
+- `initState` dispara DB + HTTP + sync en el mismo momento que la animación de navegación.
+
+## Solución obligatoria (orden de prioridad)
+
+### A) ListView invertido — FIX PRINCIPAL
+En `chat_screen.dart`:
+- Usar `ListView.builder(reverse: true, ...)`.
+- Ajustar `itemBuilder` para que el índice 0 sea el mensaje más reciente (invertir orden de `messages` o mapear índice).
+- Colocar `TypingIndicator` en el extremo correcto con `reverse: true`.
+- **Eliminar** `_needsInitialScroll`, `_positionAtBottom`, y cualquier `jumpTo`/`animateTo` en apertura.
+- Con `reverse: true`, la apertura debe mostrar el final SIN ninguna llamada a ScrollController.
+
+### B) Scroll fuera de build()
+- **Prohibido** `addPostFrameCallback` con lógica de scroll dentro del `builder` del StreamBuilder.
+- Mover scroll animado a un listener único (stream subscription o flag `_didOpen`) que solo reaccione a:
+  - mensaje nuevo llegando/enviado DESPUÉS de abierto el chat
+  - Y solo si `_isNearBottom()` (usuario al fondo).
+- `animateTo` SOLO en ese caso; nunca en apertura ni en rebuild genérico.
+
+### C) Primer frame con datos (sin flash vacío)
+Opción preferida (implementar al menos una):
+1. Precargar mensajes en `chats_list_screen.dart` antes del `Navigator.push`:
+   `final initial = await messageRepository.watchMessages(id).first;`
+   Pasar `initialMessages` a `ChatScreen`.
+2. O usar `StreamBuilder(initialData: cachedMessages)` si hay caché.
+
+El chat NO debe pintar lista vacía y luego llenarse si ya hay historial local.
+
+### D) Tap fluido — diferir trabajo pesado
+En `ChatScreen.initState`:
+- NO await nada pesado antes del primer frame.
+- Orden: montar UI → primer frame con caché → luego en microtask/scheduleFrame:
+  - `_markRead()` (HTTP)
+  - `_refresh(silent: true)` (sync background, con guard TTL existente)
+- `hasLocalMessages` no debe bloquear la decisión de mostrar UI; la caché la provee el stream/precarga.
+
+### E) Navegación
+En `chats_list_screen.dart` onTap:
+- Precargar mensajes locales ANTES del push (ver C).
+- `unawaited(Navigator.push(...))` o push sin await si el refresh post-vuelta no lo necesita bloqueante.
+- No hacer trabajo extra síncrono en el onTap.
+
+## Criterios de aceptación (obligatorios)
+- [ ] Abrir chat con historial en caché: último mensaje visible en el PRIMER frame, sin scroll visible.
+- [ ] Cero `jumpTo`/`animateTo` en apertura (verificar: no llamadas scroll en initState ni primer build).
+- [ ] Reabrir mismo chat: igual de instantáneo, sin “buscar de nuevo”.
+- [ ] Scroll animado solo si usuario está al fondo y llega/envía mensaje nuevo DESPUÉS de abierto.
+- [ ] Tap en lista: transición fluida, sin lag perceptible (< 1 frame de retraso extra).
+- [ ] Probar secuencia: A → volver → A → B → volver → A (siempre estable).
+
+## Prueba manual
+1. Abrir chat con 50+ mensajes en caché → debe aparecer directo al final, sin movimiento.
+2. Grabar pantalla a 60fps → no debe haber frame mostrando mensajes viejos arriba.
+3. Recibir mensaje con chat abierto y usuario al fondo → scroll suave solo ahí.
+4. Recibir mensaje con usuario scrolleado arriba → NO auto-scroll.
+
+## Archivos a tocar
+- `whatsbot_app/lib/screens/chat_screen.dart` (principal: reverse ListView, quitar scroll en build)
+- `whatsbot_app/lib/screens/chats_list_screen.dart` (precarga antes de push)
+- Opcional: `message_repository.dart` si hace falta helper `getCachedMessages(id)` síncrono/rápido
+
+## No romper
+- Offline-first, cola saliente, paginación 500, WS→DB→UI, leído/no leído, pedidos, message_alerts.
+
+## Antes de finalizar
+- Explicar por qué `reverse: true` elimina el salto (vs jumpTo post-frame).
+- Confirmar que no queda ningún `addPostFrameCallback` de scroll en `build()`.
+- `cd whatsbot_app && flutter analyze && flutter test`
+- Nota breve en `docs/INCREMENTAL_GUIDE.md`
+
+## REGLAS
+- Cambio mínimo; solo Flutter (`whatsbot_app/`)
+- No tocar backend ni chatbot
+
+
+
+## resp cursor ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+MEJORA: Apertura de chat 100% fluida — cero saltos visuales (comportamiento WhatsApp)
+## Lectura obligatoria antes de tocar código
+1. **`PROMPT_EVOLUCION_SAAS_WHATSBOT.md`** — reglas absolutas: WhatsBot = Flutter móvil, UI tipo WhatsApp, offline-first, cero regresión del chatbot, cambio mínimo por fase.
+2. **`docs/INCREMENTAL_GUIDE.md`** — secciones ya cerradas:
+   - "Chat: apertura sin scroll visible" (`_openingConversation` + `Opacity: 0`)
+   - "Chat: apertura instantánea desde caché" (`_needsInitialScroll`, TTL sync, sin spinner con caché)
+3. **`docs/FLUTTER_APP.md`** — arquitectura offline-first: Drift SQLite → repositorios → `SyncEngine` → streams; WS sin polling.
+**No reimplementar** lo ya hecho en v1.15 (TTL, `needsSyncFromApi`, sync en background, spinner solo sin caché). Esta fase corrige el **salto visual** y el **lag al tocar**, que persisten tras v1.15.
+
+
+[[[
+
+# MEJORA: Apertura de chat 100% fluida (cero saltos, como WhatsApp)
+
+## Problema actual (regresión UX)
+Al tocar un chat en la lista:
+1. Hay sensación de "pegado" al abrir (lag en el tap / transición).
+2. Se ve un salto o animación de bajada: primero aparece arriba y luego baja al último mensaje.
+3. No se siente como WhatsApp, donde el chat abre YA al final, sin movimiento visible.
+
+## Diagnóstico (causa raíz — no parchear síntomas)
+- `ListView` normal arranca en offset 0 (arriba); `jumpTo` en postFrameCallback ocurre DESPUÉS del primer paint → salto visible.
+- Lógica de scroll dentro de `build()` via `addPostFrameCallback` se re-ejecuta en cada rebuild del StreamBuilder.
+- `_scrollToBottom(force: true)` usa `animated: true` por defecto en ramas post-apertura.
+- `StreamBuilder` primer frame puede ser `[]` aunque SQLite tenga datos.
+- `initState` dispara DB + HTTP + sync en el mismo momento que la animación de navegación.
+
+## Solución obligatoria (orden de prioridad)
+
+### A) ListView invertido — FIX PRINCIPAL
+En `chat_screen.dart`:
+- Usar `ListView.builder(reverse: true, ...)`.
+- Ajustar `itemBuilder` para que el índice 0 sea el mensaje más reciente (invertir orden de `messages` o mapear índice).
+- Colocar `TypingIndicator` en el extremo correcto con `reverse: true`.
+- **Eliminar** `_needsInitialScroll`, `_positionAtBottom`, y cualquier `jumpTo`/`animateTo` en apertura.
+- Con `reverse: true`, la apertura debe mostrar el final SIN ninguna llamada a ScrollController.
+
+### B) Scroll fuera de build()
+- **Prohibido** `addPostFrameCallback` con lógica de scroll dentro del `builder` del StreamBuilder.
+- Mover scroll animado a un listener único (stream subscription o flag `_didOpen`) que solo reaccione a:
+  - mensaje nuevo llegando/enviado DESPUÉS de abierto el chat
+  - Y solo si `_isNearBottom()` (usuario al fondo).
+- `animateTo` SOLO en ese caso; nunca en apertura ni en rebuild genérico.
+
+### C) Primer frame con datos (sin flash vacío)
+Opción preferida (implementar al menos una):
+1. Precargar mensajes en `chats_list_screen.dart` antes del `Navigator.push`:
+   `final initial = await messageRepository.watchMessages(id).first;`
+   Pasar `initialMessages` a `ChatScreen`.
+2. O usar `StreamBuilder(initialData: cachedMessages)` si hay caché.
+
+El chat NO debe pintar lista vacía y luego llenarse si ya hay historial local.
+
+### D) Tap fluido — diferir trabajo pesado
+En `ChatScreen.initState`:
+- NO await nada pesado antes del primer frame.
+- Orden: montar UI → primer frame con caché → luego en microtask/scheduleFrame:
+  - `_markRead()` (HTTP)
+  - `_refresh(silent: true)` (sync background, con guard TTL existente)
+- `hasLocalMessages` no debe bloquear la decisión de mostrar UI; la caché la provee el stream/precarga.
+
+### E) Navegación
+En `chats_list_screen.dart` onTap:
+- Precargar mensajes locales ANTES del push (ver C).
+- `unawaited(Navigator.push(...))` o push sin await si el refresh post-vuelta no lo necesita bloqueante.
+- No hacer trabajo extra síncrono en el onTap.
+
+## Criterios de aceptación (obligatorios)
+- [ ] Abrir chat con historial en caché: último mensaje visible en el PRIMER frame, sin scroll visible.
+- [ ] Cero `jumpTo`/`animateTo` en apertura (verificar: no llamadas scroll en initState ni primer build).
+- [ ] Reabrir mismo chat: igual de instantáneo, sin “buscar de nuevo”.
+- [ ] Scroll animado solo si usuario está al fondo y llega/envía mensaje nuevo DESPUÉS de abierto.
+- [ ] Tap en lista: transición fluida, sin lag perceptible (< 1 frame de retraso extra).
+- [ ] Probar secuencia: A → volver → A → B → volver → A (siempre estable).
+
+## Prueba manual
+1. Abrir chat con 50+ mensajes en caché → debe aparecer directo al final, sin movimiento.
+2. Grabar pantalla a 60fps → no debe haber frame mostrando mensajes viejos arriba.
+3. Recibir mensaje con chat abierto y usuario al fondo → scroll suave solo ahí.
+4. Recibir mensaje con usuario scrolleado arriba → NO auto-scroll.
+
+## Archivos a tocar
+- `whatsbot_app/lib/screens/chat_screen.dart` (principal: reverse ListView, quitar scroll en build)
+- `whatsbot_app/lib/screens/chats_list_screen.dart` (precarga antes de push)
+- Opcional: `message_repository.dart` si hace falta helper `getCachedMessages(id)` síncrono/rápido
+
+## No romper
+- Offline-first, cola saliente, paginación 500, WS→DB→UI, leído/no leído, pedidos, message_alerts.
+
+## Antes de finalizar
+- Explicar por qué `reverse: true` elimina el salto (vs jumpTo post-frame).
+- Confirmar que no queda ningún `addPostFrameCallback` de scroll en `build()`.
+- `cd whatsbot_app && flutter analyze && flutter test`
+- Nota breve en `docs/INCREMENTAL_GUIDE.md`
+
+## REGLAS
+- Cambio mínimo; solo Flutter (`whatsbot_app/`)
+- No tocar backend ni chatbot
+
+]]]
+
+
+
+
+## segundo prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+MEJORA: Apertura de chat 100% fluida — cero saltos visuales (comportamiento WhatsApp)
+## Lectura obligatoria antes de tocar código
+1. **`PROMPT_EVOLUCION_SAAS_WHATSBOT.md`** — reglas absolutas: WhatsBot = Flutter móvil, UI tipo WhatsApp, offline-first, cero regresión del chatbot, cambio mínimo por fase.
+2. **`docs/INCREMENTAL_GUIDE.md`** — secciones ya cerradas:
+   - "Chat: apertura sin scroll visible" (`_openingConversation` + `Opacity: 0`)
+   - "Chat: apertura instantánea desde caché" (`_needsInitialScroll`, TTL sync, sin spinner con caché)
+3. **`docs/FLUTTER_APP.md`** — arquitectura offline-first: Drift SQLite → repositorios → `SyncEngine` → streams; WS sin polling.
+**No reimplementar** lo ya hecho en v1.15 (TTL, `needsSyncFromApi`, sync en background, spinner solo sin caché). Esta fase corrige el **salto visual** y el **lag al tocar**, que persisten tras v1.15.
+
+
+[[[
+
+# MEJORA: Apertura de chat 100% fluida (cero saltos, como WhatsApp)
+
+## Problema actual (regresión UX)
+Al tocar un chat en la lista:
+1. Hay sensación de "pegado" al abrir (lag en el tap / transición).
+2. Se ve un salto o animación de bajada: primero aparece arriba y luego baja al último mensaje.
+3. No se siente como WhatsApp, donde el chat abre YA al final, sin movimiento visible.
+
+## Diagnóstico (causa raíz — no parchear síntomas)
+- `ListView` normal arranca en offset 0 (arriba); `jumpTo` en postFrameCallback ocurre DESPUÉS del primer paint → salto visible.
+- Lógica de scroll dentro de `build()` via `addPostFrameCallback` se re-ejecuta en cada rebuild del StreamBuilder.
+- `_scrollToBottom(force: true)` usa `animated: true` por defecto en ramas post-apertura.
+- `StreamBuilder` primer frame puede ser `[]` aunque SQLite tenga datos.
+- `initState` dispara DB + HTTP + sync en el mismo momento que la animación de navegación.
+
+## Solución obligatoria (orden de prioridad)
+
+### A) ListView invertido — FIX PRINCIPAL
+En `chat_screen.dart`:
+- Usar `ListView.builder(reverse: true, ...)`.
+- Ajustar `itemBuilder` para que el índice 0 sea el mensaje más reciente (invertir orden de `messages` o mapear índice).
+- Colocar `TypingIndicator` en el extremo correcto con `reverse: true`.
+- **Eliminar** `_needsInitialScroll`, `_positionAtBottom`, y cualquier `jumpTo`/`animateTo` en apertura.
+- Con `reverse: true`, la apertura debe mostrar el final SIN ninguna llamada a ScrollController.
+
+### B) Scroll fuera de build()
+- **Prohibido** `addPostFrameCallback` con lógica de scroll dentro del `builder` del StreamBuilder.
+- Mover scroll animado a un listener único (stream subscription o flag `_didOpen`) que solo reaccione a:
+  - mensaje nuevo llegando/enviado DESPUÉS de abierto el chat
+  - Y solo si `_isNearBottom()` (usuario al fondo).
+- `animateTo` SOLO en ese caso; nunca en apertura ni en rebuild genérico.
+
+### C) Primer frame con datos (sin flash vacío)
+Opción preferida (implementar al menos una):
+1. Precargar mensajes en `chats_list_screen.dart` antes del `Navigator.push`:
+   `final initial = await messageRepository.watchMessages(id).first;`
+   Pasar `initialMessages` a `ChatScreen`.
+2. O usar `StreamBuilder(initialData: cachedMessages)` si hay caché.
+
+El chat NO debe pintar lista vacía y luego llenarse si ya hay historial local.
+
+### D) Tap fluido — diferir trabajo pesado
+En `ChatScreen.initState`:
+- NO await nada pesado antes del primer frame.
+- Orden: montar UI → primer frame con caché → luego en microtask/scheduleFrame:
+  - `_markRead()` (HTTP)
+  - `_refresh(silent: true)` (sync background, con guard TTL existente)
+- `hasLocalMessages` no debe bloquear la decisión de mostrar UI; la caché la provee el stream/precarga.
+
+### E) Navegación
+En `chats_list_screen.dart` onTap:
+- Precargar mensajes locales ANTES del push (ver C).
+- `unawaited(Navigator.push(...))` o push sin await si el refresh post-vuelta no lo necesita bloqueante.
+- No hacer trabajo extra síncrono en el onTap.
+
+## Criterios de aceptación (obligatorios)
+- [ ] Abrir chat con historial en caché: último mensaje visible en el PRIMER frame, sin scroll visible.
+- [ ] Cero `jumpTo`/`animateTo` en apertura (verificar: no llamadas scroll en initState ni primer build).
+- [ ] Reabrir mismo chat: igual de instantáneo, sin “buscar de nuevo”.
+- [ ] Scroll animado solo si usuario está al fondo y llega/envía mensaje nuevo DESPUÉS de abierto.
+- [ ] Tap en lista: transición fluida, sin lag perceptible (< 1 frame de retraso extra).
+- [ ] Probar secuencia: A → volver → A → B → volver → A (siempre estable).
+
+## Prueba manual
+1. Abrir chat con 50+ mensajes en caché → debe aparecer directo al final, sin movimiento.
+2. Grabar pantalla a 60fps → no debe haber frame mostrando mensajes viejos arriba.
+3. Recibir mensaje con chat abierto y usuario al fondo → scroll suave solo ahí.
+4. Recibir mensaje con usuario scrolleado arriba → NO auto-scroll.
+
+## Archivos a tocar
+- `whatsbot_app/lib/screens/chat_screen.dart` (principal: reverse ListView, quitar scroll en build)
+- `whatsbot_app/lib/screens/chats_list_screen.dart` (precarga antes de push)
+- Opcional: `message_repository.dart` si hace falta helper `getCachedMessages(id)` síncrono/rápido
+
+## No romper
+- Offline-first, cola saliente, paginación 500, WS→DB→UI, leído/no leído, pedidos, message_alerts.
+
+## Antes de finalizar
+- Explicar por qué `reverse: true` elimina el salto (vs jumpTo post-frame).
+- Confirmar que no queda ningún `addPostFrameCallback` de scroll en `build()`.
+- `cd whatsbot_app && flutter analyze && flutter test`
+- Nota breve en `docs/INCREMENTAL_GUIDE.md`
+
+## REGLAS
+- Cambio mínimo; solo Flutter (`whatsbot_app/`)
+- No tocar backend ni chatbot
+
+]]]
+
+
+
+## resp cursor ##
+
+
+
+Implementada la apertura fluida del chat. Resumen:
+
+## Por qué `reverse: true` elimina el salto
+
+Con un `ListView` normal, el scroll arranca en offset 0 (arriba). El historial solo se ve al final después de `jumpTo(maxScrollExtent)` en un `postFrameCallback`, **después** del primer paint — de ahí el salto visible.
+
+Con `reverse: true` + índice 0 = mensaje más reciente:
+- offset 0 **ya es el fondo** del chat
+- el último mensaje aparece en el **primer frame**, sin `ScrollController`
+- los mensajes viejos quedan arriba (mayor offset al hacer scroll)
+
+## Cambios realizados
+
+### `chat_screen.dart`
+- `ListView.builder(reverse: true)` con mapeo de índices (más reciente abajo)
+- `TypingIndicator` en `i == 0` (debajo del último mensaje)
+- Eliminados `_needsInitialScroll`, `_positionAtBottom` y scroll en apertura
+- **Sin** `addPostFrameCallback` de scroll en el `builder` del `StreamBuilder`
+- Scroll animado solo en `_onMessagesUpdated` (listener del stream) si hay mensaje nuevo y `_isNearBottom()` (offset ≤ 96 con lista invertida)
+- `initialMessages` + `initialData` en `StreamBuilder` para evitar flash vacío
+- `_markRead()` y `_refresh()` diferidos con `scheduleFrameCallback` (después del primer paint)
+
+### `chats_list_screen.dart`
+- Precarga SQLite con `getCachedMessages()` antes del `push`
+- `unawaited(Navigator.push(...))` para no bloquear el tap
+
+### `message_repository.dart`
+- Helper `getCachedMessages(id)` para la precarga
+
+### `docs/INCREMENTAL_GUIDE.md`
+- Nueva sección documentada
+
+## Criterios de aceptación
+
+| Criterio | Estado |
+|----------|--------|
+| Último mensaje visible en primer frame (caché) | ✅ `reverse` + `initialData` |
+| Cero `jumpTo`/`animateTo` en apertura | ✅ Solo en envío/mensaje nuevo al fondo |
+| Reabrir mismo chat instantáneo | ✅ Precarga + sin re-scroll |
+| Scroll animado solo al fondo + mensaje nuevo | ✅ `_onMessagesUpdated` |
+| Tap fluido | ✅ Precarga local rápida + push sin await |
+
+## Verificación
+
+```
+flutter analyze → No issues found!
+flutter test    → 11/11 passed
+```
+
+El único `addPostFrameCallback` restante está en `_scrollToBottom`, usado solo al **enviar** o cuando llega un **mensaje nuevo** con el usuario al fondo — nunca en apertura ni en `build()`.
+
+
+
+
+#############################################################
+
 

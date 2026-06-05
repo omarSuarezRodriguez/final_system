@@ -1,6 +1,7 @@
 import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
@@ -19,9 +20,14 @@ import '../widgets/typing_indicator.dart';
 import 'order_actions_bar.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.conversation});
+  const ChatScreen({
+    super.key,
+    required this.conversation,
+    this.initialMessages,
+  });
 
   final Conversation conversation;
+  final List<ChatMessage>? initialMessages;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -35,10 +41,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _orderBusy = false;
   bool _peerTyping = false;
-  bool _needsInitialScroll = true;
+  int _lastMessageCount = 0;
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
+  StreamSubscription<List<ChatMessage>>? _messagesSub;
 
   MessageRepository get _messages => AppServices.messageRepository;
   ChatRepository get _chats => AppServices.chatRepository;
@@ -46,6 +53,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _lastMessageCount = widget.initialMessages?.length ?? 0;
     AppServices.syncEngine.trackOpenConversation(widget.conversation.id);
     messageAlerts.setActiveConversation(widget.conversation.id);
     _inputController.addListener(_onInputChanged);
@@ -55,8 +63,13 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       if (online) unawaited(_refresh(silent: true));
     });
-    unawaited(_refresh(silent: true));
-    unawaited(_markRead());
+    _messagesSub = _messages
+        .watchMessages(widget.conversation.id)
+        .listen(_onMessagesUpdated);
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      unawaited(_markRead());
+      unawaited(_refresh(silent: true));
+    });
   }
 
   @override
@@ -71,6 +84,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputController.removeListener(_onInputChanged);
     _realtimeSub?.cancel();
     _connectivitySub?.cancel();
+    _messagesSub?.cancel();
     _typingStopTimer?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
@@ -103,6 +117,22 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       await apiClient.markConversationRead(widget.conversation.id);
     } catch (_) {}
+  }
+
+  void _onMessagesUpdated(List<ChatMessage> messages) {
+    if (!mounted) return;
+
+    final count = messages.length;
+    final hadGrowth = count > _lastMessageCount && _lastMessageCount > 0;
+    _lastMessageCount = count;
+
+    if (messages.isNotEmpty) {
+      unawaited(_persistSeen(messages));
+    }
+
+    if (hadGrowth && _isNearBottom()) {
+      _scrollToBottom(animated: true);
+    }
   }
 
   void _onInputChanged() {
@@ -176,7 +206,8 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final hasCache = await _messages.hasLocalMessages(widget.conversation.id);
+    final hasCache = (widget.initialMessages?.isNotEmpty ?? false) ||
+        await _messages.hasLocalMessages(widget.conversation.id);
     if (!mounted) return;
 
     final showLoading = !silent || !hasCache;
@@ -199,9 +230,6 @@ class _ChatScreenState extends State<ChatScreen> {
           displayName: widget.conversation.displayName,
           messages: allMessages,
         );
-      }
-      if (!_needsInitialScroll) {
-        _scrollToBottom(force: !silent, animated: !silent);
       }
     } catch (_) {
       if (!mounted) return;
@@ -228,46 +256,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _isNearBottom() {
     if (!_scrollController.hasClients) return true;
-    final max = _scrollController.position.maxScrollExtent;
-    return _scrollController.offset >= max - 96;
-  }
-
-  void _positionAtBottom({bool finalize = false}) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (!_scrollController.hasClients) {
-          if (finalize) setState(() => _needsInitialScroll = false);
-          return;
-        }
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        if (finalize && _needsInitialScroll) {
-          setState(() => _needsInitialScroll = false);
-        }
-      });
-    });
+    return _scrollController.offset <= 96;
   }
 
   void _scrollToBottom({bool force = true, bool animated = true}) {
-    if (_needsInitialScroll) {
-      _positionAtBottom();
-      return;
-    }
+    if (!force && !_isNearBottom()) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!_scrollController.hasClients) return;
-        final max = _scrollController.position.maxScrollExtent;
-        if (!force && !_isNearBottom()) return;
-        if (!animated) {
-          _scrollController.jumpTo(max);
-          return;
-        }
-        _scrollController.animateTo(
-          max,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      });
+      if (!_scrollController.hasClients) return;
+      if (!animated) {
+        _scrollController.jumpTo(0);
+        return;
+      }
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
     });
   }
 
@@ -362,20 +366,11 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: StreamBuilder<List<ChatMessage>>(
         stream: _messages.watchMessages(widget.conversation.id),
+        initialData: widget.initialMessages,
         builder: (context, snapshot) {
           final messages = snapshot.data ?? [];
           final showSpinner = messages.isEmpty && _refreshing;
-
-          if (snapshot.hasData && messages.isNotEmpty) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              unawaited(_persistSeen(messages));
-              if (_needsInitialScroll) {
-                _positionAtBottom(finalize: true);
-              } else if (_isNearBottom()) {
-                _scrollToBottom(force: true);
-              }
-            });
-          }
+          final typingOffset = _peerTyping ? 1 : 0;
 
           return Column(
             children: [
@@ -393,14 +388,18 @@ class _ChatScreenState extends State<ChatScreen> {
                       ? const Center(child: CircularProgressIndicator())
                       : ListView.builder(
                           controller: _scrollController,
+                          reverse: true,
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount:
-                              messages.length + (_peerTyping ? 1 : 0),
+                          itemCount: messages.length + typingOffset,
                           itemBuilder: (_, i) {
-                            if (_peerTyping && i == messages.length) {
+                            if (_peerTyping && i == 0) {
                               return const TypingIndicator();
                             }
-                            return MessageBubble(message: messages[i]);
+                            final messageIndex =
+                                messages.length - 1 - (i - typingOffset);
+                            return MessageBubble(
+                              message: messages[messageIndex],
+                            );
                           },
                         ),
                 ),

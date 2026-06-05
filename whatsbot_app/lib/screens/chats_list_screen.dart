@@ -79,6 +79,23 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     );
   }
 
+  Future<void> _openChat(Conversation chat) async {
+    final initial =
+        await AppServices.messageRepository.getCachedMessages(chat.id);
+    if (!mounted) return;
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversation: chat,
+            initialMessages: initial,
+          ),
+        ),
+      ),
+    );
+    unawaited(_refresh(silent: true));
+  }
+
   Future<void> _openConversationById(int conversationId) async {
     Conversation? chat = await _chats.getConversation(conversationId);
     if (chat == null) {
@@ -89,8 +106,18 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
 
     final nav = navigatorKey.currentState;
     if (nav == null) return;
-    await nav.push(
-      MaterialPageRoute(builder: (_) => ChatScreen(conversation: chat!)),
+    final initial =
+        await AppServices.messageRepository.getCachedMessages(chat.id);
+    if (!mounted) return;
+    unawaited(
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversation: chat!,
+            initialMessages: initial,
+          ),
+        ),
+      ),
     );
     if (mounted) unawaited(_refresh(silent: true));
   }
@@ -286,14 +313,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
                             ],
                           ],
                         ),
-                        onTap: () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ChatScreen(conversation: chat),
-                            ),
-                          );
-                          unawaited(_refresh(silent: true));
-                        },
+                        onTap: () => unawaited(_openChat(chat)),
                       );
                     },
                   ),
