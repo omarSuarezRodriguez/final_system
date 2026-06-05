@@ -2,8 +2,6 @@ import 'dart:async' show StreamSubscription, Timer, unawaited;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:uuid/uuid.dart';
-
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
 import '../di/app_services.dart';
@@ -48,8 +46,6 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
   StreamSubscription<List<ChatMessage>>? _messagesSub;
-  int _uiPendingMessageId = -100000;
-  static const _uuid = Uuid();
 
   MessageRepository get _messageRepo => AppServices.messageRepository;
   ChatRepository get _chats => AppServices.chatRepository;
@@ -126,21 +122,9 @@ class _ChatScreenState extends State<ChatScreen> {
     return latest == null || lastAt.isAfter(latest);
   }
 
-  void _mergeIncomingMessage(ChatMessage message) {
-    var index = _displayMessages.indexWhere((m) => m.id == message.id);
-    if (index < 0 &&
-        message.clientUuid != null &&
-        message.clientUuid!.isNotEmpty) {
-      index = _displayMessages.indexWhere(
-        (m) => m.clientUuid == message.clientUuid,
-      );
-    }
-    if (index >= 0) {
-      _displayMessages[index] = message;
-    } else {
-      _displayMessages = [..._displayMessages, message]
-        ..sort(ChatMessage.compareChronological);
-    }
+  bool _messageBelongsToChat(ChatMessage message) {
+    if (message.conversationId == widget.conversation.id) return true;
+    return _sameWa(message.waId, widget.conversation.customerWaId);
   }
 
   /// SQLite puede emitir vacío un instante al reemplazar id temporal → id servidor.
@@ -234,11 +218,8 @@ class _ChatScreenState extends State<ChatScreen> {
     switch (event.type) {
       case 'message.new':
         final message = event.message;
-        if (message == null ||
-            message.conversationId != widget.conversation.id) {
-          break;
-        }
-        setState(() => _mergeIncomingMessage(message));
+        if (message == null || !_messageBelongsToChat(message)) break;
+        // SyncEngine ya persistió en SQLite; el stream Drift actualiza la UI.
         _onMessagesUpdated(_displayMessages);
         unawaited(_markRead());
         if (_displayMessages.isNotEmpty) {
@@ -250,20 +231,27 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           );
         }
+        break;
       case 'conversation.updated':
       case 'conversation.sync':
         final conversation = event.conversation;
         if (conversation != null &&
-            conversation.id == widget.conversation.id &&
+            (conversation.id == widget.conversation.id ||
+                _sameWa(
+                  conversation.customerWaId,
+                  widget.conversation.customerWaId,
+                )) &&
             _conversationHasNewerActivity(conversation)) {
           unawaited(_fetchMissingMessagesIfNeeded(conversation: conversation));
         }
+        break;
       case 'order.pending':
         final order = event.order;
         if (order != null &&
             _sameWa(order.waId, widget.conversation.customerWaId)) {
           setState(() => _pendingOrder = order);
         }
+        break;
       case 'order.updated':
         final order = event.order;
         if (order == null ||
@@ -273,14 +261,17 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {
           _pendingOrder = order.status == 'pending' ? order : null;
         });
+        break;
       case 'typing.start':
         if (event.conversationId == widget.conversation.id) {
           setState(() => _peerTyping = true);
         }
+        break;
       case 'typing.stop':
         if (event.conversationId == widget.conversation.id) {
           setState(() => _peerTyping = false);
         }
+        break;
     }
   }
 
@@ -363,42 +354,20 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty || _sending) return;
 
-    final clientUuid = _uuid.v4();
-    final now = DateTime.now().toUtc();
-    final pending = ChatMessage(
-      id: _uiPendingMessageId--,
-      conversationId: widget.conversation.id,
-      direction: 'outgoing',
-      body: text,
-      waId: widget.conversation.customerWaId,
-      isAdmin: true,
-      channel: 'whatsapp',
-      status: 'pending',
-      createdAt: now,
-      clientUuid: clientUuid,
-    );
-
-    setState(() {
-      _sending = true;
-      _mergeIncomingMessage(pending);
-    });
     _inputController.clear();
-    _onMessagesUpdated(_displayMessages);
-    _scrollToBottom(force: true);
+    setState(() => _sending = true);
     realtimeService.sendTyping(
       conversationId: widget.conversation.id,
       isTyping: false,
     );
     try {
+      // WhatsApp-style: escribir en SQLite → Drift stream actualiza la UI al instante.
       final result = await _messageRepo.sendMessage(
         conversationId: widget.conversation.id,
         customerWaId: widget.conversation.customerWaId,
         body: text,
-        clientUuid: clientUuid,
       );
       if (!mounted) return;
-      setState(() => _mergeIncomingMessage(result.message));
-      _onMessagesUpdated(_displayMessages);
       _scrollToBottom(force: true);
       if (result.queued) {
         ScaffoldMessenger.of(context).showSnackBar(

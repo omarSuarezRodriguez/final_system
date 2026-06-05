@@ -74,7 +74,8 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     }
 
     final conversation = event.conversation ??
-        await _chats.getConversation(message.conversationId);
+        await _chats.getConversation(message.conversationId) ??
+        await _chats.findConversationByWaId(message.waId);
     if (conversation == null) return;
 
     unawaited(

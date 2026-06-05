@@ -49,6 +49,7 @@ def serialize_message(msg: Message) -> dict[str, Any]:
         "delivered_at": _iso(msg.delivered_at),
         "read_at": _iso(msg.read_at),
         "created_at": _iso(msg.created_at),
+        "client_id": msg.client_id,
     }
 
 

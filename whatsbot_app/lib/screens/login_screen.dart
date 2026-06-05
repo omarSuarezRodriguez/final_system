@@ -43,7 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
       messageAlerts.seedFromLogin();
       await pushService.registerAfterLogin();
       await realtimeService.connect();
-      unawaited(AppServices.hydrateAfterLogin());
+      await AppServices.hydrateAfterLogin();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ChatsListScreen()),

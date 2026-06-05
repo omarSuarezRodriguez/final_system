@@ -1,4 +1,4 @@
-## v1.25
+## v1.26
 
 
 
@@ -3385,4 +3385,46 @@ Si en el servidor existen **conversaciones duplicadas** para el mismo cliente (f
 
 
 
+##########
+
+
+Implementado. Resumen:
+
+## Cambios
+
+### 1. `message_repository.dart` — SQLite ya no “mueve” mensajes
+- `_preserveLocalConversation`: al upsert de un mensaje **existente**, se mantiene el `conversationId` local.
+- `upsertMessageDeduped` / `upsertMessages`: si solo cambia `status`/`deliveredAt` (típico del WS), usa `updateStatus` en lugar de reemplazar la fila.
+- `sendMessage` acepta `clientUuid` opcional (compartido con la UI).
+
+### 2. `chat_screen.dart` — burbuja optimista al instante
+- Al pulsar Enviar, la burbuja aparece **en el mismo frame** (antes de cualquier `await`).
+- Mismo `clientUuid` que el repositorio → sin duplicados al confirmar.
+
+### 3. `message.dart`
+- `copyWith` ahora permite `conversationId` (para tests y merges).
+
+### 4. Tests
+- Nuevo: `upsertMessageDeduped conserva conversationId tras WS con otro id`.
+- **17 tests** pasando.
+
+---
+
+## Cómo probar en el dispositivo
+
+En la terminal de `flutter run`:
+
+1. **`R`** (hot restart, no solo `r`)
+2. Abre el chat de Omar Suarez
+3. Envía un mensaje → debe verse al instante y **quedarse** visible tras la confirmación del servidor/WS
+
+Si no ves cambios, para la app y vuelve a ejecutar `flutter run` (rebuild completo).
+
+
+
+
+
 #######################################
+## v1.26
+
+
