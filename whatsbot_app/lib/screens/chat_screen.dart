@@ -35,7 +35,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   bool _orderBusy = false;
   bool _peerTyping = false;
-  bool _didInitialScroll = false;
+  bool _openingConversation = true;
   Timer? _typingStopTimer;
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectivitySub;
@@ -173,6 +173,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _refresh({bool silent = false}) async {
     if (!connectivityService.isOnline) {
       if (!silent && mounted) setState(() => _refreshing = false);
+      if (silent && _openingConversation) {
+        _positionAtBottom(finalize: true);
+      }
       return;
     }
     if (!silent) setState(() => _refreshing = true);
@@ -194,10 +197,17 @@ class _ChatScreenState extends State<ChatScreen> {
           messages: allMessages,
         );
       }
-      _scrollToBottom(force: !silent || !_didInitialScroll);
+      if (silent && _openingConversation) {
+        _positionAtBottom(finalize: true);
+      } else {
+        _scrollToBottom(force: !silent, animated: !_openingConversation);
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() => _refreshing = false);
+      if (silent && _openingConversation) {
+        _positionAtBottom(finalize: true);
+      }
     }
   }
 
@@ -224,15 +234,36 @@ class _ChatScreenState extends State<ChatScreen> {
     return _scrollController.offset >= max - 96;
   }
 
-  void _scrollToBottom({bool force = true}) {
+  void _positionAtBottom({bool finalize = false}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) {
+          if (finalize) {
+            setState(() => _openingConversation = false);
+          }
+          return;
+        }
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        if (finalize && _openingConversation) {
+          setState(() => _openingConversation = false);
+        }
+      });
+    });
+  }
+
+  void _scrollToBottom({bool force = true, bool animated = true}) {
+    if (_openingConversation) {
+      _positionAtBottom();
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_scrollController.hasClients) return;
         final max = _scrollController.position.maxScrollExtent;
         if (!force && !_isNearBottom()) return;
-        if (force && !_didInitialScroll) {
+        if (!animated) {
           _scrollController.jumpTo(max);
-          _didInitialScroll = true;
           return;
         }
         _scrollController.animateTo(
@@ -260,7 +291,7 @@ class _ChatScreenState extends State<ChatScreen> {
         body: text,
       );
       if (!mounted) return;
-      _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
+      _scrollToBottom(force: true);
       if (result.queued) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -342,7 +373,11 @@ class _ChatScreenState extends State<ChatScreen> {
           if (snapshot.hasData && messages.isNotEmpty) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               unawaited(_persistSeen(messages));
-              _scrollToBottom(force: !_didInitialScroll || _isNearBottom());
+              if (_openingConversation) {
+                _positionAtBottom();
+              } else if (_isNearBottom()) {
+                _scrollToBottom(force: true);
+              }
             });
           }
 
@@ -360,16 +395,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   color: WhatsAppTheme.chatBackground,
                   child: showSpinner
                       ? const Center(child: CircularProgressIndicator())
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: messages.length + (_peerTyping ? 1 : 0),
-                          itemBuilder: (_, i) {
-                            if (_peerTyping && i == messages.length) {
-                              return const TypingIndicator();
-                            }
-                            return MessageBubble(message: messages[i]);
-                          },
+                      : Stack(
+                          children: [
+                            Opacity(
+                              opacity: _openingConversation ? 0 : 1,
+                              child: IgnorePointer(
+                                ignoring: _openingConversation,
+                                child: ListView.builder(
+                                  controller: _scrollController,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                  itemCount: messages.length +
+                                      (_peerTyping ? 1 : 0),
+                                  itemBuilder: (_, i) {
+                                    if (_peerTyping && i == messages.length) {
+                                      return const TypingIndicator();
+                                    }
+                                    return MessageBubble(message: messages[i]);
+                                  },
+                                ),
+                              ),
+                            ),
+                            if (_openingConversation && messages.isNotEmpty)
+                              const Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                          ],
                         ),
                 ),
               ),

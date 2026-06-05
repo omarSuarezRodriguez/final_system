@@ -546,7 +546,7 @@ Entregables:
 
 ## Prompt 22 — Mejora incremental (plantilla)
 
-```
+
 @PROMPT_EVOLUCION_SAAS_WHATSBOT.md
 @docs/INCREMENTAL_GUIDE.md
 
@@ -559,9 +559,11 @@ REGLAS:
 - Si toca API: validate_system.py + pytest
 - Nota breve en docs/INCREMENTAL_GUIDE.md
 - validate_chatbot.py al final si tocaste backend
-```
 
----
+
+
+
+
 
 ## Utilidades (cualquier momento)
 

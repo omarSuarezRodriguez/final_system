@@ -355,7 +355,7 @@ cd whatsbot_app && flutter analyze
 - [x] Aprobar pedido desde app: verifica Twilio, persiste confirmación en chat y emite `message.new`
 - [x] Burbujas: respuestas del bot con etiqueta «WhatsBot»; mensajes del dueño sin marca
 - [x] Lista de chats: reorden al instante vía WS (`message.new`) sin depender solo del polling
-- [x] Al abrir chat: scroll al final con `jumpTo` tras layout (doble post-frame)
+- [x] Al abrir chat: posición final instantánea (`jumpTo` sin animación; lista oculta hasta sync inicial)
 - [x] Leído/no leído: `seenAt` alineado al último mensaje al salir del chat (incluye salientes)
 
 ```bash
@@ -409,3 +409,11 @@ flutter test
 ```
 
 **Fases offline-first cerradas.** Pedidos offline (aprobar/rechazar sin red) quedan fuera de alcance.
+
+---
+
+## Chat: apertura sin scroll visible ✅
+
+- `chat_screen.dart`: fase `_openingConversation` oculta la lista (`Opacity: 0`) hasta el `jumpTo` final tras sync/cache.
+- Solo `animateTo` cuando el chat ya está abierto y el usuario está al fondo (mensaje nuevo o envío).
+- Evita el desplazamiento visible al cargar historial incremental desde SQLite + red.

@@ -1,4 +1,4 @@
-## v1.13
+## v1.14 - Chat: apertura sin scroll visible
 
 
 
@@ -1926,6 +1926,122 @@ La app WhatsBot queda **offline-first**: chats e historial desde SQLite, envío 
 ## v1.13
 
 
+Ese `flutter test` intermedio se abortó mientras depurábamos fallos en los tests (binding de `shared_preferences`, mapas inmutables en el mock HTTP y un widget test que colgaba).
+
+Esos problemas ya quedaron resueltos en OF-E. La validación final pasó: **9/9 tests**, `flutter analyze` limpio y el test de idempotencia `client_id` en backend OK.
 
 
+
+
+
+
+
+
+############################################
+## v1.14
+
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+
+MEJORA: [
+    
+Analiza el comportamiento actual de la pantalla de chat y compáralo con WhatsApp.
+
+PROBLEMA:
+Actualmente, cuando el usuario abre una conversación, la lista de mensajes realiza un scroll animado hasta el final del chat. Esto genera un efecto visual donde se ve el movimiento de desplazamiento.
+
+COMPORTAMIENTO DESEADO (WhatsApp):
+Cuando el usuario entra a una conversación:
+
+- Debe aparecer directamente en la posición final de la conversación.
+- No debe verse ninguna animación de scroll.
+- No debe observarse el desplazamiento desde mensajes antiguos hasta los más recientes.
+- La pantalla debe renderizarse ya posicionada en el último mensaje disponible.
+- El usuario debe percibir que el chat abrió instantáneamente en el mensaje más reciente.
+
+TAREAS:
+
+1. Identificar qué componente controla actualmente el scroll automático.
+2. Encontrar cualquier llamada a:
+   - scrollToEnd()
+   - animateTo()
+   - jumpTo()
+   - animateScroll()
+   - cualquier método similar.
+3. Modificar la lógica para que el posicionamiento inicial ocurra antes de que el chat sea visible al usuario.
+4. Evitar animaciones durante la carga inicial.
+5. Mantener el auto-scroll únicamente cuando:
+   - llega un mensaje nuevo,
+   - o el usuario envía un mensaje.
+
+IMPORTANTE:
+No romper:
+- carga de mensajes históricos,
+- paginación,
+- recepción de mensajes en tiempo real,
+- indicador de nuevos mensajes,
+- rendimiento de conversaciones largas.
+
+Antes de finalizar:
+- Verifica que al abrir cualquier conversación la vista aparezca directamente en el último mensaje.
+- Verifica que no exista ningún desplazamiento visible.
+- Verifica que el comportamiento sea equivalente al de WhatsApp.
+- Explica exactamente qué cambios realizaste y en qué archivos.
+
+]
+
+REGLAS:
+- Cambio mínimo; no tocar lógica de chatbot/gateway ni intents
+- UI solo Flutter (whatsbot_app/)
+- Si toca API: validate_system.py + pytest
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+- validate_chatbot.py al final si tocaste backend
+
+
+## resp cursor ##
+
+
+## Resumen
+
+El scroll animado al abrir un chat venía de `chat_screen.dart`: el listado se posicionaba con `jumpTo` en la primera carga en caché, pero al terminar el sync incremental llegaban más mensajes y el siguiente scroll usaba `animateTo`, y el usuario veía el desplazamiento.
+
+### Causa
+
+1. **`_didInitialScroll`** se marcaba tras el primer `jumpTo` con pocos mensajes en caché.
+2. Al sincronizar el historial completo, el `StreamBuilder` volvía a hacer scroll con **`animateTo`** (200 ms).
+3. El usuario veía la lista desde arriba un instante y luego el movimiento hasta el final.
+
+### Cambios en `whatsbot_app/lib/screens/chat_screen.dart`
+
+| Cambio | Detalle |
+|--------|---------|
+| **`_openingConversation`** | Sustituye `_didInitialScroll`; cubre toda la fase de apertura hasta que termina el sync inicial. |
+| **`_positionAtBottom()`** | Solo `jumpTo` (sin animación); con `finalize: true` revela el chat. |
+| **Lista oculta al abrir** | `Opacity: 0` + spinner mientras `_openingConversation`; el layout ocurre sin que se vea el scroll. |
+| **`_scrollToBottom()`** | `animateTo` solo si el chat ya está abierto; durante la apertura delega en `_positionAtBottom()`. |
+| **`StreamBuilder`** | Reposiciona con `jumpTo` mientras abre; después solo anima si el usuario está al fondo. |
+| **Offline** | Si no hay red, finaliza la apertura con mensajes en caché. |
+
+### Comportamiento conservado
+
+- Carga histórica y sync incremental
+- Mensajes en tiempo real (animación solo si estás al fondo)
+- Envío de mensajes (`force: true` → scroll al último)
+- Indicador de “cerca del fondo” (`_isNearBottom`, 96 px)
+- Sin cambios en backend ni chatbot
+
+### Documentación
+
+Nota breve en `docs/INCREMENTAL_GUIDE.md` (sección “Chat: apertura sin scroll visible”).
+
+`flutter analyze lib/screens/chat_screen.dart` — sin issues.
+
+
+
+
+
+
+#################################################################
 
