@@ -1,4 +1,4 @@
-## v1.7
+## v1.8
 
 
 
@@ -954,6 +954,220 @@ Usa **Prompt 18** cuando quieras dejar de depender de ngrok en el PC:
 
 ###########################################################
 ## v1.7
+
+## prompt ##
+
+No hagas nada, solo dime qué debo hacer ahora, las notificaciones funcionan com owhatsapp? por qué dices esto?
+
+2. Firebase push (si quieres app cerrada/background)
+Usa Prompt 19 de PROMPTS_LISTOS.md. Sin Firebase, el sistema ya funciona con WS + notificaciones locales; push real es el único hueco de paridad con WhatsApp con app muerta.
+
+No hagas naa solo responde
+
+
+
+## resp cursor ##
+
+Sí: **ya está implementado en el código** (backend + Flutter). Lo que falta es **configurarlo en Firebase y en tu `.env`** — no hay que programar de nuevo la lógica push.
+
+---
+
+## Qué ya existe en el repo
+
+| Parte | Qué hace |
+|-------|----------|
+| **Backend** | `push_service.py` — si `FCM_ENABLED=true` y no hay WebSocket activo, envía push al llegar un mensaje del cliente |
+| **API** | `POST/DELETE /whatsbot/device-token` — la app registra el token al hacer login |
+| **Flutter** | `push_service.dart` — pide token FCM, lo manda al servidor, tap en notificación abre el chat |
+| **Docs** | `docs/FLUTTER_APP.md` sección **Push FCM/APNs** |
+
+Por defecto está **apagado**: `FCM_ENABLED=false` en `.env.example`.
+
+---
+
+## Qué debes hacer tú (configuración, no código)
+
+### 1. Firebase Console
+- Crear proyecto en [console.firebase.google.com](https://console.firebase.google.com)
+- Añadir app **Android** (`com.whatsbot.whatsbot_app`)
+- Añadir app **iOS** (mismo bundle id que en Xcode)
+
+### 2. Archivos en la app Flutter
+- **Android:** descargar `google-services.json` → `whatsbot_app/android/app/google-services.json`
+- **iOS:** descargar `GoogleService-Info.plist` → `whatsbot_app/ios/Runner/GoogleService-Info.plist`
+- En Xcode: capability **Push Notifications** (en iOS)
+
+### 3. Clave de servicio para el servidor
+- Firebase → Configuración del proyecto → Cuentas de servicio → Generar clave JSON
+- Guardar en algo como `final_system/credentials/firebase-service-account.json` (está en gitignore)
+
+### 4. `.env` del backend (`final_system/.env`)
+```env
+FCM_ENABLED=true
+FCM_SERVICE_ACCOUNT_JSON_PATH=credentials/firebase-service-account.json
+```
+
+### 5. Dependencias y rebuild
+```bash
+pip install -r requirements.txt   # firebase-admin
+cd whatsbot_app && flutter pub get && flutter run   # recompilar app
+```
+
+### 6. iOS extra (solo si usas iPhone)
+- Subir clave APNs en Firebase (Cloud Messaging)
+- Certificado/provisioning con push habilitado
+
+---
+
+## Cómo comprobar que funciona
+
+1. Login en la app (registra el token en el servidor)
+2. **Cierra la app por completo** (no solo minimizar)
+3. Cliente escribe al bot por WhatsApp
+4. Debe llegar notificación del **sistema** (no solo sonido interno de la app)
+5. Tap → abre el chat correcto
+
+---
+
+## Si no pones los archivos de Firebase
+
+La app **no rompe**: `PushService.init()` falla en silencio y sigues con WebSocket + notificaciones locales. El plugin de Gradle solo se aplica si existe `google-services.json` en `android/app/`.
+
+---
+
+**Resumen:** la lógica push ya está; tú solo conectas Firebase (archivos + `.env` + rebuild). Si quieres que te guíe paso a paso en un chat nuevo, usa el **Prompt 19** de `PROMPTS_LISTOS.md`.
+
+
+
+
+## segundo prompt ##
+
+No hagas nada solo responde: en @PROMPTS_LISTOS.md , qué prompts hay? osea dame un resumen no hagas nada solo dime prompt 19 para tal cosa y así
+
+
+
+## resp cursor ##
+
+
+Resumen de `PROMPTS_LISTOS.md` (solo lectura):
+
+---
+
+## Base del proyecto (Fases 0–10) — ya hechas ✅
+
+| Prompt | Para qué |
+|--------|----------|
+| **0** | Verificar que pegaste el bot en la raíz (sin tocar nada) |
+| **1** | Fase 0 — Análisis del bot legacy, sin código |
+| **2** | Fase 1 — Scaffold `final_system/` + `.env` |
+| **3** | Fase 2 — Copiar chatbot + gateway |
+| **4** | Fase 3 — Config centralizada |
+| **5** | Fase 4 — API FastAPI + webhook + mensajes en BD |
+| **6** | Fase 5 — Multi-negocio (business, menú, pedidos) |
+| **7** | Fase 6 — Pedidos + confirmación ADMIN WhatsApp legacy |
+| **8** | Fase 7 — API REST para Flutter (chats, menú, intents) |
+| **9** | Fase 8 — Google Sheets opcional |
+| **10** | Fase 9 — App Flutter UI tipo WhatsApp |
+| **11** | Fase 10 — Validación final + README + guías |
+| **11b** | Si faltan credenciales después de Fase 1 |
+
+---
+
+## Utilidades (numeración vieja — ojo, choca con Fase 11)
+
+| Prompt | Para qué |
+|--------|----------|
+| **12** (viejo) | Corregir una fase que falló |
+| **13** (viejo) | Mejora incremental genérica post-proyecto |
+| **14** (viejo) | Alta de un negocio en producción |
+
+---
+
+## Fase 11 — Tiempo real — ya hecha ✅
+
+| Prompt | Para qué |
+|--------|----------|
+| **12** (11.1) | Análisis WS vs SSE, sin código |
+| **13** (11.2) | Backend WebSocket + eventos |
+| **14** (11.3) | Flutter WebSocket, quitar polling |
+| **15** (11.4) | Push FCM/APNs (código; tú configuras Firebase) |
+| **16** (11.5) | Ticks de mensaje + pedidos live + typing |
+| **17** (11.6) | Validación E2E + `validate_system.py` |
+
+---
+
+## Fase 12+ — Pendiente (lo que te toca ahora)
+
+| Prompt | Para qué |
+|--------|----------|
+| **18** | Deploy producción (Railway, HTTPS, webhook estable) |
+| **19** | **Configurar Firebase push de punta a punta** (app cerrada) |
+| **20** | Redis si escalas a varias instancias API |
+| **21** | Dar de alta un segundo negocio en producción |
+| **22** | Plantilla para cualquier mejora incremental nueva |
+
+---
+
+## Extra (sin número de prompt)
+
+- **Continuar en chat nuevo** — retomar desde Fase N en un chat limpio
+
+---
+
+**Nota:** Los prompts **12–14** están duplicados (utilidades viejas vs Fase 11). Para tiempo real usa los de la sección **Fase 11**; para “arreglar un fallo” usa el **12 viejo** (Corrección).
+
+**Para Firebase:** **Prompt 19**.
+
+
+
+
+## tercer prompt ##
+
+
+Ok entonces, como mejora incremental, actualiza los prompts de ahí que estén (viejo) para que estén bien
+
+
+
+## resp cursor ##
+
+
+Actualicé `PROMPTS_LISTOS.md` (no toqué `README_PROMPTS.md`). Cambios principales:
+
+### Problema resuelto
+Los viejos **Prompt 12–14** (corrección, mejora incremental, alta negocio) chocaban con la **Fase 11** (también 12–17).
+
+### Nueva numeración
+
+| Antes (viejo) | Ahora |
+|---------------|-------|
+| Prompt 12 Corrección | **U1** (utilidad) |
+| Prompt 13 Mejora incremental | **22** (plantilla unificada y mejorada) |
+| Prompt 14 Alta negocio | **21** (con campos Nombre/Twilio/Admin) |
+| Continuar chat nuevo | **U2** |
+
+### Otros ajustes
+- **Índice rápido** al inicio con todos los prompts y su estado
+- Fase 11 marcada como **ya implementada** (auditar si se re-ejecuta)
+- Prompt 10: nota de que el polling se sustituye en Fase 11
+- Prompt 15: aclara que Firebase lo configuras tú (Prompt 19)
+- Resumen visual simplificado al final
+
+### Qué usar ahora
+
+| Objetivo | Prompt |
+|----------|--------|
+| Deploy estable | **18** |
+| Push con app cerrada | **19** |
+| Nuevo negocio | **21** |
+| Cualquier mejora nueva | **22** |
+| Algo falló | **U1** |
+| Chat nuevo / retomar | **U2** |
+
+
+
+
+
+########################################################
 
 
 
