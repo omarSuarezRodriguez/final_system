@@ -83,17 +83,15 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     final initial =
         await AppServices.messageRepository.getCachedMessages(chat.id);
     if (!mounted) return;
-    unawaited(
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            conversation: chat,
-            initialMessages: initial,
-          ),
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          conversation: chat,
+          initialMessages: initial,
         ),
       ),
     );
-    unawaited(_refresh(silent: true));
+    if (mounted) unawaited(_refresh(silent: true));
   }
 
   Future<void> _openConversationById(int conversationId) async {
@@ -109,13 +107,11 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     final initial =
         await AppServices.messageRepository.getCachedMessages(chat.id);
     if (!mounted) return;
-    unawaited(
-      nav.push(
-        MaterialPageRoute(
-          builder: (_) => ChatScreen(
-            conversation: chat!,
-            initialMessages: initial,
-          ),
+    await nav.push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          conversation: chat!,
+          initialMessages: initial,
         ),
       ),
     );

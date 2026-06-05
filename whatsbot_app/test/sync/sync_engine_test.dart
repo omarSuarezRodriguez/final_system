@@ -73,6 +73,43 @@ void main() {
     expect(conversation?.lastMessagePreview, 'Desde WS');
   });
 
+  test('handleRealtimeEvent sube conversación aunque no exista en SQLite', () async {
+    final message = ChatMessage(
+      id: 91,
+      conversationId: 42,
+      direction: 'incoming',
+      body: 'Primer mensaje local',
+      waId: '+5491111111999',
+      isAdmin: false,
+      channel: 'whatsapp',
+      status: 'delivered',
+      createdAt: DateTime.utc(2026, 6, 1, 16),
+    );
+
+    testApi.conversations
+      ..clear()
+      ..add({
+        'id': 42,
+        'business_id': 'default',
+        'customer_wa_id': '+5491111111999',
+        'customer_name': 'Cliente nuevo',
+        'last_message_preview': 'Primer mensaje local',
+        'last_message_at': '2026-06-01T16:00:00Z',
+        'updated_at': '2026-06-01T16:00:00Z',
+      });
+
+    await engine.handleRealtimeEvent(
+      RealtimeEvent(
+        type: 'message.new',
+        message: message,
+      ),
+    );
+
+    final conversation = await chats.getConversation(42);
+    expect(conversation?.lastMessagePreview, 'Primer mensaje local');
+    expect(conversation?.lastMessageAt?.toUtc(), DateTime.utc(2026, 6, 1, 16));
+  });
+
   test('handleRealtimeEvent actualiza conversación aunque el mensaje esté deduplicado',
       () async {
     final message = ChatMessage(

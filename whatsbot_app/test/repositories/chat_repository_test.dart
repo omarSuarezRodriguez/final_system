@@ -64,6 +64,29 @@ void main() {
     expect(row?.customerName, 'Otro nombre');
   });
 
+  test('mergeWithLocal conserva preview local si el timestamp empata', () {
+    final local = Conversation(
+      id: 1,
+      businessId: 'default',
+      customerWaId: '+5491111111111',
+      lastMessagePreview: 'Envío del dueño',
+      lastMessageAt: DateTime.utc(2026, 6, 1, 15),
+      updatedAt: DateTime.utc(2026, 6, 1, 15),
+    );
+    final sameTime = Conversation(
+      id: 1,
+      businessId: 'default',
+      customerWaId: '+5491111111111',
+      lastMessagePreview: 'Preview viejo del servidor',
+      lastMessageAt: DateTime.utc(2026, 6, 1, 15),
+      updatedAt: DateTime.utc(2026, 6, 1, 15),
+    );
+
+    final merged = repository.mergeWithLocal(local, sameTime);
+    expect(merged.lastMessagePreview, 'Envío del dueño');
+    expect(merged.lastMessageAt?.toUtc(), DateTime.utc(2026, 6, 1, 15));
+  });
+
   test('mergeWithLocal no retrocede lastMessageAt', () {
     final local = Conversation(
       id: 1,

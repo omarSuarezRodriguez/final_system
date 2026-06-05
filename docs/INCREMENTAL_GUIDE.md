@@ -485,6 +485,21 @@ flutter test
 
 ---
 
+## Chat: preview al enviar + orden al recibir (v1.19) ✅
+
+- `chat_repository.dart`: `mergeWithLocal` no sobrescribe preview local si el servidor trae el mismo `lastMessageAt`; `upsertConversations` usa merge por ítem (no pisa envíos optimistas).
+- `message_repository.dart`: `_bumpConversation` siempre actualiza preview en mensajes salientes del dueño.
+- `sync_engine.dart`: `message.new` sube la conversación aunque no exista aún en SQLite (sync + bump) y fusiona metadata WS con caché local.
+- `chats_list_screen.dart`: `await Navigator.push` al abrir chat y refresh al volver (preview actualizado tras enviar).
+
+**Validar:** abrir chat → enviar → volver a la lista: preview y chat al tope; mensaje entrante también sube al tope.
+
+```bash
+cd whatsbot_app && flutter test && flutter analyze
+```
+
+---
+
 ## Chat: orden cronológico + lista al recibir (v1.18) ✅
 
 - `message_dao.dart` / `ChatMessage.compareChronological`: orden estable por `createdAt` + `id`.
