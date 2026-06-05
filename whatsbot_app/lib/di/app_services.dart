@@ -1,3 +1,5 @@
+import 'dart:async' show Timer, unawaited;
+
 import '../data/local/app_database.dart';
 import '../data/repositories/chat_repository.dart';
 import '../data/repositories/message_repository.dart';
@@ -19,6 +21,7 @@ class AppServices {
   static late SyncEngine syncEngine;
 
   static bool _initialized = false;
+  static Timer? _foregroundSyncTimer;
 
   static bool get isInitialized => _initialized;
 
@@ -37,6 +40,7 @@ class AppServices {
   static void _wireRealtime() {
     realtimeService.onReconnectSync = syncEngine.syncOnReconnect;
     realtimeService.persistEvent = syncEngine.handleRealtimeEvent;
+    realtimeService.connectivityOnline = () => connectivityService.isOnline;
     syncEngine.onIncomingMessage = _onIncomingMessage;
   }
 
@@ -56,8 +60,7 @@ class AppServices {
 
   static Future<void> _onBackOnline() async {
     if (!apiClient.isLoggedIn) return;
-    await hydrateAfterLogin();
-    await realtimeService.connect();
+    await startRealtimeSession();
   }
 
   static Future<void> clearLocalData() async {
@@ -65,9 +68,44 @@ class AppServices {
     await database.clearAll();
   }
 
-  /// Cola saliente + hidratación tras login, cold start o vuelta de red.
+  /// Login / cold start: WS + hidratación + keepalive (sesión WhatsApp).
+  static Future<void> startRealtimeSession() async {
+    if (!_initialized || !apiClient.isLoggedIn) return;
+    await realtimeService.connect();
+    await hydrateAfterLogin();
+    _startForegroundFallback();
+  }
+
+  /// Vuelta a primer plano: reconectar WS y traer delta.
+  static Future<void> onAppResumed() async {
+    if (!_initialized || !apiClient.isLoggedIn) return;
+    await realtimeService.onAppResumed();
+    _startForegroundFallback();
+  }
+
+  /// Cola saliente + sync incremental (también tras reconexión WS).
   static Future<void> hydrateAfterLogin() async {
     if (!_initialized) return;
     await syncEngine.syncOnReconnect();
+  }
+
+  /// Reintenta WS cada 90s si se cayó con la app abierta.
+  static void _startForegroundFallback() {
+    _foregroundSyncTimer?.cancel();
+    _foregroundSyncTimer = Timer.periodic(
+      const Duration(seconds: 90),
+      (_) => unawaited(_foregroundSyncTick()),
+    );
+  }
+
+  static Future<void> _foregroundSyncTick() async {
+    if (!apiClient.isLoggedIn || !connectivityService.isOnline) return;
+    if (realtimeService.isConnected) return;
+    await realtimeService.ensureConnected();
+  }
+
+  static void stopForegroundFallback() {
+    _foregroundSyncTimer?.cancel();
+    _foregroundSyncTimer = null;
   }
 }

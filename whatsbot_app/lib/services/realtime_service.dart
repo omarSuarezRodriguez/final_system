@@ -8,13 +8,20 @@ import '../config/api_config.dart';
 import '../models/realtime_event.dart';
 import 'api_client.dart';
 
-/// WebSocket tiempo real — Fase 11.3 + OF-B (persistencia vía SyncEngine).
+/// WebSocket tiempo real — sesión persistente estilo WhatsApp.
 ///
-/// Conecta tras login; reconexión con backoff; sync REST al reconectar.
+/// - Conecta tras login y mantiene la sesión con ping + watchdog
+/// - Reconexión con backoff si se cae (ngrok, red, etc.)
+/// - Sync REST incremental al reconectar o al volver a primer plano
 class RealtimeService {
   RealtimeService._();
 
   static final RealtimeService instance = RealtimeService._();
+
+  static const Duration _ackTimeout = Duration(seconds: 15);
+  static const Duration _clientPingInterval = Duration(seconds: 25);
+  static const Duration _watchdogInterval = Duration(seconds: 45);
+  static const Duration _staleConnection = Duration(seconds: 90);
 
   final StreamController<RealtimeEvent> _events =
       StreamController<RealtimeEvent>.broadcast();
@@ -24,11 +31,15 @@ class RealtimeService {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
   Timer? _reconnectTimer;
+  Timer? _ackTimeoutTimer;
+  Timer? _clientPingTimer;
+  Timer? _watchdogTimer;
 
   bool _intentionalDisconnect = false;
   bool _connecting = false;
   bool _connected = false;
   int _backoffSeconds = 1;
+  DateTime? _lastActivityAt;
 
   /// Evita abrir WebSocket real en widget tests.
   bool disableSocketForTesting = false;
@@ -45,15 +56,49 @@ class RealtimeService {
 
   bool get isConnected => _connected;
 
+  /// Inicia o restablece la sesión WS (login, cold start, vuelta de red).
   Future<void> connect() async {
     if (!apiClient.isLoggedIn || disableSocketForTesting) return;
     _intentionalDisconnect = false;
     _reconnectTimer?.cancel();
     await _openSocket();
+    _startKeepAlive();
+  }
+
+  /// Reconecta y sincroniza al volver a primer plano (patrón WhatsApp).
+  Future<void> onAppResumed() async {
+    if (!apiClient.isLoggedIn || disableSocketForTesting) return;
+    _intentionalDisconnect = false;
+    _backoffSeconds = 1;
+    _connecting = false;
+    if (!_connected) {
+      await _openSocket();
+    }
+    _startKeepAlive();
+    await _syncAfterReconnect();
+  }
+
+  /// Fuerza reconexión si la sesión quedó colgada.
+  Future<void> ensureConnected() async {
+    if (!apiClient.isLoggedIn || disableSocketForTesting) return;
+    if (_connected) return;
+    _intentionalDisconnect = false;
+    if (_connecting) {
+      final stale = _lastActivityAt;
+      if (stale != null &&
+          DateTime.now().difference(stale) < _ackTimeout) {
+        return;
+      }
+      _connecting = false;
+    }
+    _reconnectTimer?.cancel();
+    await _openSocket();
+    _startKeepAlive();
   }
 
   Future<void> disconnect() async {
     _intentionalDisconnect = true;
+    _stopKeepAlive();
     _reconnectTimer?.cancel();
     await _subscription?.cancel();
     _subscription = null;
@@ -61,6 +106,7 @@ class RealtimeService {
       await _channel?.sink.close(ws_status.goingAway);
     } catch (_) {}
     _channel = null;
+    _connecting = false;
     _setConnected(false);
   }
 
@@ -76,14 +122,20 @@ class RealtimeService {
   }
 
   Future<void> _openSocket() async {
-    if (_connecting || _intentionalDisconnect || !apiClient.isLoggedIn) {
-      return;
-    }
+    if (_intentionalDisconnect || !apiClient.isLoggedIn) return;
+    if (_connecting) return;
 
     final token = apiClient.accessToken;
     if (token == null || token.isEmpty) return;
 
     _connecting = true;
+    _ackTimeoutTimer?.cancel();
+    _ackTimeoutTimer = Timer(_ackTimeout, () {
+      if (_connecting && !_connected) {
+        _forceReconnect();
+      }
+    });
+
     await _subscription?.cancel();
     _subscription = null;
     try {
@@ -100,17 +152,20 @@ class RealtimeService {
       _channel = channel;
       _subscription = channel.stream.listen(
         _onData,
-        onError: (_) => _handleDisconnect(),
-        onDone: _handleDisconnect,
+        onError: (_) => _forceReconnect(),
+        onDone: _forceReconnect,
         cancelOnError: true,
       );
     } catch (_) {
       _connecting = false;
+      _ackTimeoutTimer?.cancel();
       _scheduleReconnect();
     }
   }
 
   void _onData(dynamic data) {
+    _touchActivity();
+
     Map<String, dynamic>? map;
     try {
       final decoded = jsonDecode(data as String);
@@ -130,6 +185,7 @@ class RealtimeService {
       return;
     }
     if (type == 'connected') {
+      _ackTimeoutTimer?.cancel();
       _connecting = false;
       _backoffSeconds = 1;
       _setConnected(true);
@@ -159,7 +215,7 @@ class RealtimeService {
     try {
       await persist(event);
     } catch (_) {
-      // Igual que producción: la UI recibe el evento aunque falle SQLite.
+      // La UI recibe el evento aunque falle SQLite.
     }
     if (!_events.isClosed) _events.add(event);
   }
@@ -167,12 +223,16 @@ class RealtimeService {
   /// Emula un frame WS en tests (misma ruta que `_onData`).
   Future<void> debugEmitEvent(RealtimeEvent event) => emitAfterPersist(event);
 
-  void _handleDisconnect() {
+  void _forceReconnect() {
+    _ackTimeoutTimer?.cancel();
     _connecting = false;
     _setConnected(false);
-    _channel = null;
     _subscription?.cancel();
     _subscription = null;
+    try {
+      _channel?.sink.close(ws_status.goingAway);
+    } catch (_) {}
+    _channel = null;
     _scheduleReconnect();
   }
 
@@ -192,11 +252,51 @@ class RealtimeService {
     _connectionState.add(value);
   }
 
+  void _touchActivity() {
+    _lastActivityAt = DateTime.now();
+  }
+
+  void _startKeepAlive() {
+    if (disableSocketForTesting) return;
+    _clientPingTimer?.cancel();
+    _clientPingTimer = Timer.periodic(_clientPingInterval, (_) {
+      if (!_connected || _intentionalDisconnect) return;
+      _sendJson({'type': 'ping'});
+    });
+
+    _watchdogTimer?.cancel();
+    _watchdogTimer = Timer.periodic(_watchdogInterval, (_) {
+      if (_intentionalDisconnect || !apiClient.isLoggedIn) return;
+
+      final last = _lastActivityAt;
+      if (_connected &&
+          last != null &&
+          DateTime.now().difference(last) > _staleConnection) {
+        _forceReconnect();
+        return;
+      }
+
+      if (!_connected && (connectivityOnline?.call() ?? true)) {
+        unawaited(ensureConnected());
+      }
+    });
+  }
+
+  void _stopKeepAlive() {
+    _ackTimeoutTimer?.cancel();
+    _clientPingTimer?.cancel();
+    _watchdogTimer?.cancel();
+  }
+
+  /// Inyectable en tests; en producción usa ConnectivityService vía callback.
+  bool Function()? connectivityOnline = () => true;
+
   void _sendJson(Map<String, dynamic> payload) {
     final channel = _channel;
     if (channel == null) return;
     try {
       channel.sink.add(jsonEncode(payload));
+      _touchActivity();
     } catch (_) {}
   }
 

@@ -1,4 +1,4 @@
-## v1.27.
+## v1.28
 
 
 
@@ -3540,4 +3540,53 @@ Si estás **dentro** del chat activo: sonido sí, banner no (como WhatsApp). Pus
 
 
 #######################################
+## v1.28
 
+
+## prompt ##
+
+Si desinstalo e instalo la app de nuevo, se cargan los chats, pero una vez cargados, deja de recibir, arregla eso y que sea igual el mismo funcionamiento de whatsapp, osea la manera en que whatsapp maneja eso, 
+
+
+## resp cursor ##
+
+El problema era que tras la carga inicial el **WebSocket se quedaba muerto** (muy habitual con ngrok) y la app no tenía el mecanismo de recuperación que usa WhatsApp.
+
+## Qué pasaba
+
+1. **Instalación nueva** → login → REST carga chats ✅  
+2. **WebSocket** conecta un momento y luego se cae (ngrok, red, timeout)  
+3. El flag `_connecting` podía quedarse bloqueado → **sin más reconexiones**  
+4. **Sin reconexión** al volver a primer plano  
+5. **Sin ping ni watchdog** → conexión zombie sin datos  
+
+Resultado: los chats quedaban congelados en lo que cargó al inicio.
+
+## Solución (patrón WhatsApp)
+
+| Mecanismo | Comportamiento |
+|-----------|----------------|
+| **Sesión persistente** | `startRealtimeSession()` al login: WS + caché + keepalive |
+| **Ping cliente** | Cada 25s mantiene viva la conexión (ngrok) |
+| **Watchdog** | Si 90s sin actividad → reconecta automáticamente |
+| **Timeout de conexión** | Si no llega `connected` en 15s → reintenta |
+| **Vuelta a primer plano** | Reconecta WS + sync incremental de mensajes nuevos |
+| **Fallback cada 90s** | Si el WS está caído con la app abierta → reintenta conectar |
+| **Al reconectar** | Sync REST de lo que se perdió + lista de chats se actualiza |
+
+## Para probar
+
+Hot restart (`R`) o reinstala:
+
+1. Login → chats cargan  
+2. Deja la app abierta en la lista  
+3. Pide a un cliente que escriba → debe llegar en vivo  
+4. Minimiza la app 30s y vuelve → debe seguir recibiendo  
+5. Si ves el icono de nube tachada, en ~90s debería reconectar solo  
+
+Si tras el restart sigue fallando, revisa que no aparezca el icono de nube offline de forma permanente (indicaría que el backend/ngrok no acepta `wss://`).
+
+
+
+
+#######################################

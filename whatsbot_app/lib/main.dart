@@ -1,5 +1,3 @@
-import 'dart:async' show unawaited;
-
 import 'package:flutter/material.dart';
 
 import 'di/app_services.dart';
@@ -8,7 +6,6 @@ import 'screens/login_screen.dart';
 import 'services/api_client.dart';
 import 'services/message_alerts_service.dart';
 import 'services/push_service.dart';
-import 'services/realtime_service.dart';
 import 'theme/whatsapp_theme.dart';
 import 'widgets/app_lifecycle_observer.dart';
 
@@ -58,8 +55,7 @@ class _SplashGateState extends State<SplashGate> {
     await apiClient.loadSession();
     if (apiClient.isLoggedIn) {
       await pushService.registerAfterLogin();
-      await realtimeService.connect();
-      await AppServices.hydrateAfterLogin();
+      await AppServices.startRealtimeSession();
     }
     if (!mounted) return;
     Navigator.of(context).pushReplacement(

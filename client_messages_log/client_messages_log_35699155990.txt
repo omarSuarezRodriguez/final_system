@@ -708,3 +708,23 @@ Cliente: Hola
 Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
 
 #################################################################
+################################################################
+
+Cliente: Hola
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Kedeke
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################

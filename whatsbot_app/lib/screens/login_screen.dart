@@ -1,12 +1,9 @@
-import 'dart:async' show unawaited;
-
 import 'package:flutter/material.dart';
 
 import '../di/app_services.dart';
 import '../services/api_client.dart';
 import '../services/message_alerts_service.dart';
 import '../services/push_service.dart';
-import '../services/realtime_service.dart';
 import '../theme/whatsapp_theme.dart';
 import 'chats_list_screen.dart';
 
@@ -42,8 +39,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       messageAlerts.seedFromLogin();
       await pushService.registerAfterLogin();
-      await realtimeService.connect();
-      await AppServices.hydrateAfterLogin();
+      await AppServices.startRealtimeSession();
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const ChatsListScreen()),

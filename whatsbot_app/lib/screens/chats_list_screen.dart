@@ -29,6 +29,7 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
   StreamSubscription<RealtimeEvent>? _realtimeSub;
   StreamSubscription<bool>? _connectionSub;
   StreamSubscription<bool>? _connectivitySub;
+  bool _wasConnected = false;
 
   ChatRepository get _chats => AppServices.chatRepository;
 
@@ -36,10 +37,15 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
   void initState() {
     super.initState();
     messageAlerts.onOpenConversation = _openConversationById;
-    unawaited(realtimeService.connect());
+    _wasConnected = realtimeService.isConnected;
+    unawaited(realtimeService.ensureConnected());
     _realtimeSub = realtimeService.events.listen(_onRealtimeEvent);
-    _connectionSub = realtimeService.connectionState.listen((_) {
+    _connectionSub = realtimeService.connectionState.listen((connected) {
       if (mounted) setState(() {});
+      if (connected && !_wasConnected) {
+        unawaited(_refresh(silent: true));
+      }
+      _wasConnected = connected;
     });
     _connectivitySub = connectivityService.onlineState.listen((_) {
       if (mounted) setState(() {});
