@@ -1,4 +1,4 @@
-## v1.27
+## v1.27.
 
 
 
@@ -3475,6 +3475,65 @@ La app tiene `flutter run` activo. Haz **hot restart** (tecla `R` en la terminal
 4. Si ves el icono de nube tachada en la barra, el WebSocket no está conectado (revisa que `api_config.dart` apunte a tu ngrok activo).
 
 Si tras el restart sigue sin actualizar, dime si ves el icono offline y te ayudo a revisar la conexión WebSocket.
+
+
+
+
+
+#######################################
+## v1.27
+
+
+## prompt ##
+
+Muy bien ahora el chat funciona correctamente y el orden también es bueno por llegada, pero ahora no se me notifica cuando llegan mensajes nuevos cuando se le escribe a whatsbot, revisa y arregla eso, que reciba mensajes que se muestren y que muestre notificaciones en la app (las notificaciones push funcionan y el sonido, eso no tocarlo)
+
+
+## resp cursor ## SyncEngine
+
+He corregido las notificaciones en la app. El push y el sonido no se tocaron.
+
+## Qué fallaba
+
+Las alertas solo se disparaban desde `ChatsListScreen` al recibir el WebSocket. Si:
+- estabas dentro de un chat,
+- la conversación no se resolvía bien por `conversation_id` distinto, o
+- el mensaje ya estaba en caché y el contador de IDs no estaba inicializado,
+
+**no se llamaba a `handleRealtimeMessage`** → sin sonido en primer plano, sin banner y sin punto de no leído.
+
+## Qué cambié
+
+1. **Alertas centralizadas en `SyncEngine`** — Cada mensaje entrante que se persiste en SQLite dispara la notificación, sin depender de qué pantalla esté abierta.
+
+2. **Resolución de conversación local** — Antes de notificar, busca el hilo por `wa_id` si el servidor manda otro `conversation_id`.
+
+3. **Seed de IDs al login** — Al cargar conversaciones, guarda el último `message_id` de cada chat para no repetir alertas de mensajes viejos y detectar bien los nuevos.
+
+4. **Lista de chats** — Refresca badges y preview al llegar cualquier `message.new` (entrante o saliente).
+
+## Flujo actual
+
+```
+Cliente escribe → Webhook → WS message.new
+  → SyncEngine guarda en SQLite
+  → actualiza preview del chat
+  → MessageAlertsService (sonido + banner + badge)
+  → UI se actualiza vía Drift stream
+```
+
+## Para probar
+
+Hot restart (`R` en la terminal de `flutter run`):
+
+1. Deja la app abierta en la lista de chats.
+2. Pide a un cliente que escriba.
+3. Deberías ver: chat sube arriba, preview actualizado, punto verde de no leído, sonido y banner (si no estás en ese chat).
+
+Si estás **dentro** del chat activo: sonido sí, banner no (como WhatsApp). Push en segundo plano sigue igual que antes.
+
+
+
 
 
 
