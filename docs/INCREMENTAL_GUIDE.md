@@ -229,3 +229,26 @@ python scripts/validate_chatbot.py
 ```
 
 **Probar:** login → dejar app abierta en lista de chats → enviar WhatsApp al bot → suena y aparece notificación; abrir el chat → nuevo mensaje suena sin banner; minimizar app → notificación en bandeja del sistema.
+
+---
+
+## Fase 11.2 — Backend WebSocket + eventos BD ✅
+
+**Hecho:**
+
+- [x] `services/realtime_service.py` — hub in-memory por `business_id`; eventos `message.new`, `conversation.updated`, `ping`/`pong`
+- [x] `api/routes/realtime.py` — `WS /whatsbot/ws?token=<JWT>`
+- [x] Emisión tras commit en `api/routes/whatsapp.py` (incoming/outgoing bot) y `api/routes/whatsbot.py` (mensaje dueño)
+- [x] REST incremental: `GET /whatsbot/conversations?since=ISO8601`, `GET .../messages?after_id=N`
+- [x] `REALTIME_ENABLED`, `WS_HEARTBEAT_SECONDS` en `config/settings.py` y `.env.example`
+- [x] `tests/test_realtime_ws.py` — auth WS, broadcast, webhook, filtros sync
+
+```bash
+cd final_system
+python -m pytest tests/test_realtime_ws.py -v
+python scripts/validate_chatbot.py
+```
+
+**Pendiente (11.3+):** Flutter `RealtimeService`, FCM, estados mensaje, quitar polling.
+
+**Probar WS manual:** login → token → conectar `wss://{API}/whatsbot/ws?token=...` → enviar mensaje al bot → recibir `message.new`.

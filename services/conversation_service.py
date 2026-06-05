@@ -168,11 +168,18 @@ def list_conversations(
     business_id: str,
     *,
     limit: int = 100,
+    since: datetime | None = None,
 ) -> list[Conversation]:
+    bid = _normalize_business_id(business_id)
+    q = db.query(Conversation).filter(Conversation.business_id == bid)
+    if since is not None:
+        since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        q = q.filter(
+            (Conversation.updated_at > since_utc)
+            | (Conversation.last_message_at > since_utc)
+        )
     return (
-        db.query(Conversation)
-        .filter(Conversation.business_id == _normalize_business_id(business_id))
-        .order_by(Conversation.last_message_at.desc().nullslast(), Conversation.updated_at.desc())
+        q.order_by(Conversation.last_message_at.desc().nullslast(), Conversation.updated_at.desc())
         .limit(limit)
         .all()
     )
@@ -198,11 +205,9 @@ def list_messages(
     conversation_id: int,
     *,
     limit: int = 200,
+    after_id: int | None = None,
 ) -> list[Message]:
-    return (
-        db.query(Message)
-        .filter(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
-        .limit(limit)
-        .all()
-    )
+    q = db.query(Message).filter(Message.conversation_id == conversation_id)
+    if after_id is not None:
+        q = q.filter(Message.id > after_id)
+    return q.order_by(Message.created_at.asc()).limit(limit).all()

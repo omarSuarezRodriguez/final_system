@@ -19,9 +19,10 @@ Rutas:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.middleware.auth import get_current_business_id
@@ -48,8 +49,18 @@ from services import menu_service as menu_svc
 from services import notification_service as notify_svc
 from services import order_service as order_svc
 from services import sheets_sync_service as sheets_svc
+from services.realtime_service import emit_message_saved
 
 router = APIRouter(prefix="/whatsbot", tags=["whatsbot"])
+
+
+def _parse_since(value: str | None) -> datetime | None:
+    if not value or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    return datetime.fromisoformat(raw)
 
 BusinessId = Annotated[str, Depends(get_current_business_id)]
 
@@ -65,11 +76,20 @@ def _require_business(db: Session, business_id: str):
 def list_conversations(
     business_id: BusinessId,
     limit: int = 100,
+    since: str | None = Query(
+        default=None,
+        description="ISO8601 — solo conversaciones actualizadas después de esta fecha",
+    ),
     db: Session = Depends(get_db),
 ) -> list[ConversationOut]:
     """Lista chats del negocio (estilo WhatsApp)."""
     _require_business(db, business_id)
-    return conv_svc.list_conversations(db, business_id, limit=limit)
+    return conv_svc.list_conversations(
+        db,
+        business_id,
+        limit=limit,
+        since=_parse_since(since),
+    )
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageOut])
@@ -77,6 +97,11 @@ def list_conversation_messages(
     conversation_id: int,
     business_id: BusinessId,
     limit: int = 200,
+    after_id: int | None = Query(
+        default=None,
+        ge=0,
+        description="Solo mensajes con id mayor a este (sync incremental)",
+    ),
     db: Session = Depends(get_db),
 ) -> list[MessageOut]:
     """Historial de un chat."""
@@ -84,11 +109,11 @@ def list_conversation_messages(
     conv = conv_svc.get_conversation_for_business(db, business_id, conversation_id)
     if not conv:
         raise HTTPException(404, detail="Conversación no encontrada")
-    return conv_svc.list_messages(db, conv.id, limit=limit)
+    return conv_svc.list_messages(db, conv.id, limit=limit, after_id=after_id)
 
 
 @router.post("/messages", response_model=MessageOut, status_code=201)
-def send_owner_message(
+async def send_owner_message(
     body: OwnerMessageCreate,
     business_id: BusinessId,
     db: Session = Depends(get_db),
@@ -113,7 +138,9 @@ def send_owner_message(
     db.commit()
     if not saved:
         raise HTTPException(500, detail="No se pudo guardar el mensaje")
-    return saved[-1]
+    msg = saved[-1]
+    await emit_message_saved(db, business_id, msg)
+    return msg
 
 
 @router.get("/orders/pending", response_model=list[OrderOut])

@@ -24,7 +24,16 @@ _FS = Path(__file__).resolve().parent.parent
 if str(_FS) not in sys.path:
     sys.path.insert(0, str(_FS))
 
-from api.routes import auth, businesses, menus, orders, sheets, whatsapp, whatsbot  # noqa: E402
+from api.routes import (  # noqa: E402
+    auth,
+    businesses,
+    menus,
+    orders,
+    realtime,
+    sheets,
+    whatsapp,
+    whatsbot,
+)
 from config.settings import (  # noqa: E402
     API_PUBLIC_URL,
     CORS_ORIGINS,
@@ -32,6 +41,7 @@ from config.settings import (  # noqa: E402
     DEFAULT_BUSINESS_ID,
     HOST,
     PORT,
+    REALTIME_ENABLED,
     RESTAURANT_NAME,
 )
 from infrastructure.database import init_db, session_scope  # noqa: E402
@@ -80,6 +90,7 @@ def create_app() -> FastAPI:
 
     app.include_router(whatsapp.router)
     app.include_router(auth.router)
+    app.include_router(realtime.router)
     app.include_router(whatsbot.router)
     app.include_router(businesses.router)
     app.include_router(menus.router)
@@ -95,6 +106,7 @@ def create_app() -> FastAPI:
             "restaurant": RESTAURANT_NAME,
             "default_business_id": DEFAULT_BUSINESS_ID,
             "api_public_url": API_PUBLIC_URL,
+            "realtime_enabled": REALTIME_ENABLED,
         }
 
     return app

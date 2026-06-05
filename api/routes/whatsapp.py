@@ -22,11 +22,12 @@ from sqlalchemy.orm import Session
 
 from chatbot.gateway import handle_incoming_message
 from chatbot.runtime import get_bot_context
-from config.settings import RESTAURANT_NAME, use_rest_webhook_replies
+from config.settings import REALTIME_ENABLED, RESTAURANT_NAME, use_rest_webhook_replies
 from infrastructure.database import get_db
 from infrastructure.twilio_client import build_twiml_response, deliver_reply
 from services.business_service import resolve_business_id_for_webhook
 from services.conversation_service import save_incoming_message, save_outgoing_message
+from services.realtime_service import emit_message_saved
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ async def twilio_whatsapp_webhook(
 
     # --- Persistir mensaje entrante (obligatorio Fase 4) ---
     incoming_wa = wa_id or from_number.replace("whatsapp:", "").strip()
+    saved_incoming = None
     if incoming_wa:
         try:
             ctx = get_bot_context(start_background=False)
@@ -76,7 +78,7 @@ async def twilio_whatsapp_webhook(
                 for sender in [canonical, wa_id, from_number]
                 if sender
             )
-            save_incoming_message(
+            saved_incoming = save_incoming_message(
                 db,
                 customer_wa_id=canonical,
                 body=body,
@@ -86,6 +88,8 @@ async def twilio_whatsapp_webhook(
                 twilio_sid=message_sid,
             )
             db.commit()
+            if REALTIME_ENABLED and saved_incoming is not None:
+                await emit_message_saved(db, business_id, saved_incoming)
         except Exception:
             db.rollback()
             logger.exception("Failed to save incoming message to DB")
@@ -112,7 +116,7 @@ async def twilio_whatsapp_webhook(
     # --- Persistir respuesta del bot ---
     if reply_wa_id and response_text and not blocked:
         try:
-            save_outgoing_message(
+            saved_outgoing = save_outgoing_message(
                 db,
                 customer_wa_id=reply_wa_id,
                 body=response_text,
@@ -120,6 +124,9 @@ async def twilio_whatsapp_webhook(
                 is_admin=False,
             )
             db.commit()
+            if REALTIME_ENABLED and saved_outgoing:
+                for msg in saved_outgoing:
+                    await emit_message_saved(db, business_id, msg)
         except Exception:
             db.rollback()
             logger.exception("Failed to save outgoing message to DB")

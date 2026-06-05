@@ -74,6 +74,15 @@ PARSER_ERROR_LOG_PATH = os.getenv(
 DEPLOY_URL = os.getenv("DEPLOY_URL", API_PUBLIC_URL).rstrip("/")
 DEPLOY_TIMEOUT = int(os.getenv("DEPLOY_TIMEOUT", "60"))
 
+# Realtime (Fase 11 — WebSocket + push)
+REALTIME_ENABLED = os.getenv("REALTIME_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+WS_HEARTBEAT_SECONDS = int(os.getenv("WS_HEARTBEAT_SECONDS", "30"))
+
 
 def is_twilio_whatsapp_sandbox() -> bool:
     from_digits = "".join(ch for ch in TWILIO_WHATSAPP_FROM if ch.isdigit())
