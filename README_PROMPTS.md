@@ -1,4 +1,4 @@
-## v1.31
+## v1.32
 
 
 
@@ -5662,9 +5662,83 @@ cd whatsbot_app
 flutter test
 ```
 
+## resp cursor ##
+
+**Ahora, en este orden:**
+
+## 1. Validar en el dispositivo (lo importante)
+
+Repite el fallo que reportaste con **WS conectado**:
+
+1. `flutter run` (API levantada).
+2. Login → **sin icono nube** → abre un chat.
+3. Cliente escribe por WhatsApp → burbuja **<1 s** en el chat abierto.
+4. Vuelve a la **lista** → preview actualizado y chat arriba.
+5. Abre ese chat → el mensaje **ya está**.
+
+Si eso va bien, FIX 1b está cerrado en manual.
+
+## 2. Confirmar tests (opcional, 1 min)
+
+```powershell
+cd whatsbot_app
+flutter test
+```
+
+Deberían pasar los **46** (el test FIX 1b ya no cuelga).
+
+## 3. Commit (solo si quieres)
+
+Si manual + tests OK:
+
+> *"Haz commit de FIX 1 y FIX 1b"*
+
+## 4. Siguiente fix: **FIX 2**
+
+Backfill REST al **reconectar** WS (mensajes perdidos mientras el socket estaba muerto). Es independiente de 1b.
+
+Pega el bloque **FIX 2** de `README_PROMPTS.md` o dime:
+
+> *"Aplica FIX 2"*
+
+---
+
+**Resumen:** prueba manual del escenario 2 → `flutter test` → commit opcional → FIX 2. ¿Cómo te fue en el dispositivo con WS conectado?
+
+
+## prompt para errores ##
+
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+## Reporte de errores post-FIX — NO edites código todavía
+
+Encontré errores al probar. Analiza cada uno, dime causa raíz probable, si apunta a FIX 1 / 1b / 2 / 3 / 4 u otro, y qué fix mínimo haría falta. **No modifiques código** en esta respuesta — solo diagnóstico + prioridad.
+
+### Contexto
+- **Fixes aplicados:** FIX 1 (TTL + WS↓) / FIX 1b (WS↑ alertas sí, UI no) — [cuáles probaste]
+- **Dispositivo:** [Android / iOS / emulador]
+- **Cómo corrí la app:** [flutter run / hot restart / release]
+- **API:** [local / ngrok] — URL si aplica
+- **Estado WS:** [conectado / nube / alternando]
+
+---
+
+### Error 1
+- **Qué hice (pasos):**
+- **Qué esperaba:**
+- **Qué pasó:**
+- **¿Siempre o a veces?** [siempre / intermitente]
+- **Pantalla:** [lista / chat abierto / login / otro]
+- **Log / stack trace** (pega literal):
+
+
+
+
+
 
 
 
 ###################################################
-
-

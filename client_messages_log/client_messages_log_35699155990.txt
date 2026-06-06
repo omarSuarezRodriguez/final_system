@@ -898,3 +898,113 @@ Cliente: qwdqwdqw
 Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
 
 #################################################################
+################################################################
+
+Cliente: Sisa
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: adasd
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Cómo keké
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Sisa
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Pues así
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: ll
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: ll
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: ll
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: ll
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: ll
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
+################################################################
+
+Cliente: Hola
+
+
+-------------------------------
+
+Chatbot: Responde *sí* para repetir tu pedido anterior o *no* para elegir otra opción.
+
+#################################################################
