@@ -5,6 +5,7 @@ import 'package:whatsbot_app/models/conversation.dart';
 import 'package:whatsbot_app/models/message.dart';
 import 'package:whatsbot_app/models/realtime_event.dart';
 import 'package:whatsbot_app/screens/chats_list_screen.dart';
+import 'package:whatsbot_app/services/realtime_service.dart';
 import '../helpers/realtime_test_helper.dart';
 import '../helpers/test_api_client.dart';
 import '../helpers/test_app_services.dart';
@@ -161,6 +162,42 @@ void main() {
 
       expect(listTitles(tester).first, 'Chat viejo');
       expect(find.text('Cliente escribe'), findsOneWidget);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets(
+    'ChatsListScreen actualiza preview con message.new y conversation_id servidor distinto (FIX 1b)',
+    (WidgetTester tester) async {
+      realtimeService.debugSetConnected(true);
+      await seedConversations();
+
+      await tester.pumpWidget(const MaterialApp(home: ChatsListScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await emitRealtimeEvent(
+        RealtimeEvent(
+          type: 'message.new',
+          message: ChatMessage(
+            id: 902,
+            conversationId: 99,
+            direction: 'incoming',
+            body: 'Nuevo preview FIX 1b',
+            waId: '+5491111111001',
+            isAdmin: false,
+            channel: 'whatsapp',
+            status: 'delivered',
+            createdAt: DateTime.utc(2026, 6, 5, 16),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(listTitles(tester).first, 'Chat viejo');
+      expect(find.text('Nuevo preview FIX 1b'), findsOneWidget);
 
       await disposeWidgetTree(tester);
     },

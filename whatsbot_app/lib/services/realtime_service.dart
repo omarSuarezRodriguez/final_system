@@ -251,6 +251,9 @@ class RealtimeService {
   /// Emula un frame WS en tests (misma ruta que `_onData`).
   Future<void> debugEmitEvent(RealtimeEvent event) => emitAfterPersist(event);
 
+  /// Fija estado de conexión en tests sin abrir socket real.
+  void debugSetConnected(bool value) => _setConnected(value);
+
   void _forceReconnect() {
     _ackTimeoutTimer?.cancel();
     _connecting = false;

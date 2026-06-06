@@ -142,6 +142,26 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// SQLite puede emitir vacío un instante al reemplazar id temporal → id servidor.
   /// También conserva mensajes confirmados en memoria hasta que Drift los refleje.
+  List<ChatMessage> _mergeIncomingMessage(
+    List<ChatMessage> current,
+    ChatMessage incoming,
+  ) {
+    final normalized = incoming.copyWith(
+      conversationId: widget.conversation.id,
+    );
+    final exists = current.any(
+      (m) =>
+          m.id == normalized.id ||
+          (normalized.clientUuid != null &&
+              normalized.clientUuid!.isNotEmpty &&
+              m.clientUuid == normalized.clientUuid),
+    );
+    if (exists) return current;
+    final merged = [...current, normalized];
+    merged.sort(ChatMessage.compareChronological);
+    return merged;
+  }
+
   List<ChatMessage> _reconcileMessagesFromStore(List<ChatMessage> store) {
     final merged = List<ChatMessage>.from(store);
     for (final local in _displayMessages) {
@@ -232,7 +252,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case 'message.new':
         final message = event.message;
         if (message == null || !_messageBelongsToChat(message)) break;
-        // SyncEngine persiste y dispara alertas; Drift stream actualiza burbujas.
+        setState(() {
+          _displayMessages = _mergeIncomingMessage(_displayMessages, message);
+        });
         _onMessagesUpdated(_displayMessages);
         unawaited(_markRead());
         break;

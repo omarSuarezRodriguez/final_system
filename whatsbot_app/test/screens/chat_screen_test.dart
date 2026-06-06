@@ -19,8 +19,10 @@ import '../helpers/test_api_client.dart';
 import '../helpers/test_app_services.dart';
 
 void main() {
+  late TestApiClient testApi;
+
   setUp(() async {
-    await setUpTestAppServices();
+    testApi = await setUpTestAppServices();
   });
 
   tearDown(() async {
@@ -305,6 +307,85 @@ void main() {
 
     await disposeWidgetTree(tester);
   });
+
+  testWidgets(
+    'ChatScreen muestra message.new con conversation_id servidor distinto (FIX 1b)',
+    (WidgetTester tester) async {
+      realtimeService.debugSetConnected(true);
+      await AppServices.chatRepository.upsertConversation(conversation());
+
+      await pumpChatScreen(tester, initialMessages: const []);
+
+      await emitRealtimeEvent(
+        RealtimeEvent(
+          type: 'message.new',
+          message: ChatMessage(
+            id: 777,
+            conversationId: 99,
+            direction: 'incoming',
+            body: 'Por wa_id local',
+            waId: '+5491111111111',
+            isAdmin: false,
+            channel: 'whatsapp',
+            status: 'delivered',
+            createdAt: DateTime.utc(2026, 6, 5, 14),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.text('Por wa_id local'), findsOneWidget);
+
+      await disposeWidgetTree(tester);
+    },
+  );
+
+  testWidgets(
+    'ChatScreen con WS caído trae mensaje nuevo vía REST sin reabrir',
+    (WidgetTester tester) async {
+      realtimeService.debugSetConnected(false);
+
+      testApi.messagesByConversation[1] = [
+        {
+          'id': 10,
+          'conversation_id': 1,
+          'direction': 'incoming',
+          'body': 'Historial cacheado',
+          'wa_id': '+5491111111111',
+          'is_admin': false,
+          'channel': 'whatsapp',
+          'status': 'delivered',
+          'created_at': DateTime.utc(2026, 6, 5, 10).toIso8601String(),
+        },
+      ];
+      await AppServices.messageRepository.refreshFromApi(1, incremental: true);
+
+      testApi.messagesByConversation[1] = [
+        ...testApi.messagesByConversation[1]!,
+        {
+          'id': 11,
+          'conversation_id': 1,
+          'direction': 'incoming',
+          'body': 'Nuevo vía REST',
+          'wa_id': '+5491111111111',
+          'is_admin': false,
+          'channel': 'whatsapp',
+          'status': 'delivered',
+          'created_at': DateTime.utc(2026, 6, 5, 10, 5).toIso8601String(),
+        },
+      ];
+
+      await pumpChatScreen(tester, fromSqliteOnly: true);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.text('Historial cacheado'), findsOneWidget);
+      expect(find.text('Nuevo vía REST'), findsOneWidget);
+
+      await disposeWidgetTree(tester);
+    },
+  );
 
   testWidgets('ChatScreen muestra mensaje admin tras confirmación en SQLite', (
     WidgetTester tester,

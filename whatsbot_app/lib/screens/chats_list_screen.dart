@@ -74,7 +74,13 @@ class _ChatsListScreenState extends State<ChatsListScreen> {
     final message = event.message;
     if (message == null) return;
 
-    // SyncEngine ya persistió, notificó y Drift reordena; refrescar badges/preview.
+    final chat = await _chats.findConversationByWaId(message.waId) ??
+        await _chats.getConversation(message.conversationId);
+    if (chat != null) {
+      final resolved = message.copyWith(conversationId: chat.id);
+      final bumped = _chats.mergeConversationWithMessage(chat, resolved);
+      await _chats.upsertConversation(bumped);
+    }
     if (mounted) setState(() {});
   }
 

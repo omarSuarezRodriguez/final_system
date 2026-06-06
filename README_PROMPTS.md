@@ -1,4 +1,4 @@
-## v1.30
+## v1.31
 
 
 
@@ -3899,9 +3899,1772 @@ Si webhooks perdidos → POST /whatsbot/sync/twilio
 
 
 ###########################################################
+## v1.31
+
+## prompt ##
+
+Actúa como un Arquitecto Senior de Sistemas especializado en aplicaciones de mensajería en tiempo real (WhatsApp, Telegram, Messenger, Slack).
+
+Necesito que analices completamente mi proyecto WhatsBot antes de modificar código.
+
+Objetivo:
+
+Quiero que el comportamiento del sistema sea equivalente al de WhatsApp Web en términos de sincronización, consistencia de datos y experiencia de usuario.
+
+NO empieces implementando cambios inmediatamente.
+
+Primero:
+
+1. Analiza la arquitectura actual.
+2. Identifica cuellos de botella.
+3. Identifica duplicación de responsabilidades.
+4. Identifica posibles causas de desincronización.
+5. Identifica problemas de estado.
+6. Identifica problemas de carga y actualización de conversaciones.
+7. Identifica cualquier patrón anti-escalabilidad.
+
+Después genera un informe técnico con:
+
+* Arquitectura actual.
+* Problemas encontrados.
+* Riesgos.
+* Arquitectura recomendada.
+* Plan de migración.
+
+Arquitectura objetivo:
+
+Twilio debe actuar únicamente como proveedor de eventos y transporte de mensajes.
+
+Flujo esperado:
+
+WhatsApp
+→ Twilio
+→ Webhooks
+→ Backend
+→ Base de Datos
+→ WebSocket/Event Bus
+→ Aplicación
+
+Reglas obligatorias:
+
+1. La Base de Datos debe ser la única fuente de verdad (Single Source of Truth).
+
+2. Ninguna pantalla debe depender directamente de Twilio para mostrar mensajes.
+
+3. Todo mensaje recibido desde Twilio debe:
+
+   * Persistirse primero.
+   * Validarse.
+   * Evitar duplicados usando Message SID.
+   * Actualizar conversación.
+   * Emitir evento en tiempo real.
+
+4. Todo mensaje enviado debe:
+
+   * Guardarse localmente.
+   * Actualizarse posteriormente cuando Twilio confirme envío.
+   * Actualizar estados:
+
+     * queued
+     * sent
+     * delivered
+     * read
+
+5. Si un webhook falla:
+
+   * Debe existir mecanismo de recuperación.
+   * Debe existir sincronización posterior.
+
+6. La aplicación debe comportarse igual que WhatsApp Web:
+
+   * Nuevos mensajes aparecen automáticamente.
+   * No requiere refrescar.
+   * No requiere cerrar y abrir chat.
+   * Mantiene scroll estable.
+   * Actualiza contadores de conversaciones.
+   * Actualiza conversaciones abiertas.
+   * Actualiza conversaciones cerradas.
+   * Actualiza estados de lectura.
+   * Mantiene consistencia entre dispositivos.
+
+7. Utilizar WebSockets o mecanismo equivalente para tiempo real.
+
+8. Evitar polling innecesario.
+
+9. Mantener una arquitectura preparada para soportar en el futuro:
+
+   * Twilio
+   * Meta Cloud API
+   * Otros proveedores
+
+La capa de interfaz no debe conocer el proveedor.
+
+El frontend solo debe consumir:
+
+* conversaciones
+* mensajes
+* eventos en tiempo real
+
+Entregables:
+
+1. Diagnóstico completo.
+2. Diagrama de arquitectura propuesta.
+3. Lista priorizada de correcciones.
+4. Plan paso a paso de implementación.
+5. Implementación únicamente después de presentar el análisis.
+
+No elimines funcionalidades existentes sin justificación.
+
+No realices cambios destructivos.
+
+Busca una arquitectura robusta, escalable y equivalente al comportamiento de WhatsApp Web.
+
+
+
+## resp cursor ##
+
+# Informe técnico de arquitectura — WhatsBot
+
+Análisis previo a cualquier cambio de código. El proyecto ya tiene una base sólida orientada a WhatsApp Web (BD como centro, WebSocket, sync incremental, offline-first en Flutter), pero hay brechas importantes en consistencia, separación de capas y escalabilidad.
+
+---
+
+## 1. Arquitectura actual
+
+### 1.1 Vista general
+
+```mermaid
+flowchart TB
+    subgraph External
+        WA[WhatsApp Cliente]
+        TW[Twilio]
+    end
+
+    subgraph Backend["Backend FastAPI (Python)"]
+        WH["api/routes/whatsapp.py<br/>POST /webhook, /webhook/status"]
+        WB["api/routes/whatsbot.py<br/>REST JWT"]
+        WS["api/routes/realtime.py<br/>WS /whatsbot/ws"]
+        CS["services/conversation_service.py"]
+        RT["services/realtime_service.py<br/>Hub in-memory"]
+        GW["chatbot/gateway.py"]
+        CB["chatbot legacy<br/>flow_engine, admin_service"]
+        TC["infrastructure/twilio_client.py"]
+        DB[(PostgreSQL / SQLite)]
+    end
+
+    subgraph Mobile["Flutter whatsbot_app"]
+        UI[Pantallas]
+        REPO[Repositories Drift]
+        SQLITE[(SQLite local)]
+        SYNC[SyncEngine]
+        RTM[RealtimeService WS]
+    end
+
+    WA --> TW
+    TW -->|webhook form| WH
+    WH --> CS --> DB
+    WH --> GW --> CB
+    WH --> TC --> TW
+    WH --> RT --> WS
+    WB --> CS
+    WB --> TC
+    WB --> RT
+    WS --> RTM
+    RTM --> SYNC --> REPO --> SQLITE
+    SYNC --> WB
+    UI --> REPO
+    UI --> RTM
+```
+
+### 1.2 Stack y capas
+
+| Capa | Ubicación | Rol |
+|------|-----------|-----|
+| Webhook / transporte | `api/routes/whatsapp.py`, `infrastructure/twilio_client.py` | Recibe eventos Twilio, envía respuestas |
+| Dominio mensajería | `services/conversation_service.py` | CRUD conversaciones/mensajes, dedup, estados |
+| Tiempo real | `services/realtime_service.py` | Hub WebSocket por `business_id` |
+| API app dueño | `api/routes/whatsbot.py` | REST + sync Twilio manual |
+| Chatbot legacy | `chatbot/gateway.py` + `chatbot/app/` | Lógica conversacional, pedidos, Twilio en `admin_service` |
+| Cliente móvil | `whatsbot_app/lib/` | Offline-first: Drift → streams → UI |
+
+### 1.3 Flujo inbound (mensaje cliente)
+
+```
+Twilio POST /webhook
+  → resolve_business_id_for_webhook()
+  → save_incoming_message() [dedup MessageSid] → COMMIT
+  → emit_message_saved() → WS message.new + conversation.updated
+  → handle_incoming_message() [gateway/chatbot]
+  → save_outgoing_message() [respuesta bot, sin twilio_sid]
+  → deliver_reply() [TwiML o REST vía admin_service]
+  → emit_message_saved()
+```
+
+### 1.4 Flujo outbound (dueño desde app)
+
+**Cliente (correcto):** optimista en SQLite → cola `outbound_queue` → `POST /whatsbot/messages` con `client_id`.
+
+**Servidor (orden invertido):**
+
+```143:179:c:\Users\Usuario\Desktop\System\final_system\api\routes\whatsbot.py
+async def send_owner_message(...):
+    ...
+    twilio_sid = send_whatsapp_message(wa_id, body.body)  # ← Twilio PRIMERO
+    saved = conv_svc.save_outgoing_message(...)             # ← BD DESPUÉS
+    db.commit()
+    await emit_message_saved(...)
+```
+
+### 1.5 Flujo tiempo real en Flutter
+
+```
+WS frame → RealtimeService.emitAfterPersist()
+  → SyncEngine.handleRealtimeEvent() [SQLite primero]
+  → broadcast a UI
+  → Drift watchMessages / watchConversations actualizan pantallas
+```
+
+`SyncEngine` ya maneja `message.new`, `message.status` y `conversation.updated` — los ticks deberían actualizarse vía stream Drift sin handler explícito en `ChatScreen`.
+
+### 1.6 Recuperación ante fallos
+
+| Mecanismo | Estado |
+|-----------|--------|
+| Dedup webhook por `MessageSid` | Implementado (aplicación, sin UNIQUE en BD) |
+| Dedup outbound por `client_id` | Implementado (UNIQUE en BD) |
+| Backfill Twilio | Manual: `POST /whatsbot/sync/twilio` |
+| Sync incremental REST | `?since=` / `?after_id=` en reconexión |
+| Cola saliente offline | Flutter `outbound_queue` |
+| Recuperación automática webhooks | No existe (sin cola, sin cron) |
+
+---
+
+## 2. Problemas encontrados
+
+### 2.1 Cuellos de botella
+
+| # | Problema | Impacto |
+|---|----------|---------|
+| B1 | Webhook síncrono: persist → gateway (chatbot completo) → Twilio → respuesta HTTP | Latencia alta; Twilio puede reintentar si supera timeout |
+| B2 | `RealtimeHub` in-memory, un solo proceso | Multi-worker / horizontal scaling rompe WS |
+| B3 | `get_bot_context()` lazy con Google Sheets + threads en primer webhook | Cold start lento |
+| B4 | `MessageAlertsService` hace REST `getMessages()` al cambiar preview | N+1 requests bajo carga |
+| B5 | Fallback 30s en chat abierto con WS caído | Carga REST innecesaria |
+
+### 2.2 Duplicación de responsabilidades
+
+| Área | Duplicación |
+|------|-------------|
+| Envío Twilio | `infrastructure/twilio_client.py` delega en `chatbot/app/services/admin_service._send_whatsapp()` |
+| Normalización wa_id | `admin_service`, `conversation_service`, `MessageRepository._sameWa`, gateway |
+| Persistencia pedidos | Google Sheets (legacy) + PostgreSQL (mirror) + posible desalineación |
+| Emisión realtime | `emit_message_saved`, `schedule_emit`, paths distintos sync/async |
+| Estado “visto” | SQLite `lastSeenAt` + RAM en `MessageAlertsService` + `POST mark-read` servidor |
+
+Twilio está acoplado al chatbot legacy, no a una capa de transporte abstracta.
+
+### 2.3 Causas de desincronización
+
+| # | Causa | Detalle |
+|---|-------|---------|
+| D1 | Webhook dedup solo en BD, gateway sigue ejecutándose | Reintento Twilio con mismo `MessageSid` → posible **doble respuesta del bot** |
+| D2 | Orden Twilio→BD en envío dueño | Mensaje enviado a WhatsApp pero no persistido si falla commit |
+| D3 | Bot outbound sin `twilio_sid` | `save_outgoing_message()` en webhook no captura SID de REST; estados Twilio no aplicables |
+| D4 | `emit_message_saved` promueve `sent→delivered` sin SID | Ticks incorrectos para mensajes que sí tienen tracking Twilio en otro path |
+| D5 | Webhook ACK a Twilio aunque falle BD | Twilio no reintenta; mensaje perdido hasta sync manual |
+| D6 | `lib/data/` ignorado por `.gitignore` (`data/`) | Capa crítica fuera de git → riesgo de drift entre entornos |
+| D7 | Seed login marca todo como “visto” | Sin badges para mensajes previos al primer arranque |
+| D8 | `Conversation.fromJson` sin `last_seen_at` | Estado leído del servidor no hidrata modelo REST |
+| D9 | Sync TTL 2 min puede omitir delta | Si WS falla silenciosamente y no hay fallback activo |
+| D10 | `emitAfterPersist` emite a UI aunque falle SQLite | UI muestra mensaje que no sobrevive reinicio |
+
+### 2.4 Problemas de estado
+
+| Estado | Problema |
+|--------|----------|
+| `queued` / `sending` | Mapeados a `sent` en backend; Flutter usa `pending` local — vocabulario inconsistente |
+| Bot outgoing | Inicializado como `delivered` sin pasar por Twilio |
+| Admin outgoing | `sent` correcto, pero servidor no crea fila `sending` antes de Twilio |
+| Read receipts | Solo outgoing admin + incoming; no hay read receipts WhatsApp del cliente hacia el dueño |
+| Failed | Existe en backend; UI parcial (`pending` clock en Flutter) |
+
+### 2.5 Carga y actualización de conversaciones
+
+**Lo que funciona bien:**
+- Lista: `watchConversations()` + WS `message.new`
+- Chat: caché instantánea + `watchMessages()` + `_reconcileMessagesFromStore`
+- Scroll estable: `reverse: true`, auto-scroll solo cerca del fondo
+- Gap fill: `_fetchMissingMessagesIfNeeded` ante `conversation.updated`
+
+**Problemas:**
+- `_refresh(silent: true)` en cada `initState` de chat (aunque TTL mitiga)
+- Reconciliación wa_id fuzzy puede unir hilos distintos en edge cases
+- Sin paginación UI (“load more”) pese a retención 500 msgs
+- Chats cerrados dependen de WS + sync conversaciones; sin WS pueden quedar preview desactualizado hasta reconexión
+
+### 2.6 Patrones anti-escalabilidad
+
+| Patrón | Por qué limita |
+|--------|----------------|
+| WS hub in-process | No funciona con N instancias Uvicorn/Gunicorn |
+| Redis stub (`infrastructure/cache.py`) | Sin bus distribuido |
+| Twilio acoplado a `admin_service` | Imposible añadir Meta Cloud API sin tocar chatbot |
+| Webhook monolítico (persist + bot + send) | No separable en workers |
+| Sin outbox / event log | No replay de eventos ni auditoría |
+| Sync Twilio on-demand only | No garantía de consistencia post-incidente |
+| `.gitignore data/` | Ignora `whatsbot_app/lib/data/` entero |
+
+---
+
+## 3. Riesgos
+
+| Riesgo | Severidad | Probabilidad |
+|--------|-----------|--------------|
+| Pérdida silenciosa de mensajes (webhook OK, BD fail) | Alta | Media |
+| Respuestas duplicadas del bot (replay webhook) | Alta | Media |
+| Mensaje enviado sin registro en BD (owner send) | Alta | Baja |
+| WS roto en despliegue multi-instancia | Alta | Alta al escalar |
+| Capa Drift no versionada en git | Alta | Alta (ya ocurre) |
+| Status callbacks inactivos (`API_PUBLIC_URL` localhost) | Media | Alta en dev |
+| Divergencia Sheets ↔ BD en pedidos | Media | Media |
+| Ticks/desync entre dispositivos | Media | Media |
+
+---
+
+## 4. Arquitectura recomendada
+
+### 4.1 Principios (alineados con tus reglas)
+
+1. **BD = única fuente de verdad** para conversaciones y mensajes.
+2. **Twilio = adaptador** de eventos y transporte; la UI nunca lo conoce.
+3. **Pipeline unidireccional:** Provider → Ingest → Validate → Persist → Emit.
+4. **Outbox pattern** para webhooks y envíos.
+5. **Event bus distribuido** (Redis Pub/Sub, NATS o similar) para WS multi-instancia.
+6. **Provider interface** desacoplada del dominio.
+
+### 4.2 Diagrama objetivo
+
+```mermaid
+flowchart TB
+    subgraph Providers["Capa de proveedores (adaptadores)"]
+        TP[TwilioProvider]
+        MP[MetaCloudProvider]
+        FP[FutureProvider...]
+    end
+
+    subgraph Ingest["Capa de ingesta"]
+        WH[Webhook Controller]
+        SC[Status Callback Controller]
+        ING[MessageIngestService<br/>validate + dedup SID]
+    end
+
+    subgraph Domain["Dominio (provider-agnostic)"]
+        MS[MessageService]
+        CS[ConversationService]
+        OS[OutboxService]
+        SS[StatusService]
+    end
+
+    subgraph Persistence["Persistencia"]
+        DB[(PostgreSQL)]
+        OUTBOX[(outbox_events)]
+    end
+
+    subgraph Realtime["Tiempo real"]
+        EB[Event Bus<br/>Redis/NATS]
+        WSG[WS Gateway]
+        FCM[Push FCM]
+    end
+
+    subgraph Clients["Clientes"]
+        APP[Flutter App]
+        BOT[Chatbot Gateway<br/>solo lógica, no transporte]
+    end
+
+    WA[WhatsApp] --> TP
+    TP -->|webhook| WH
+    TP -->|status| SC
+    MP -.->|futuro| WH
+
+    WH --> ING --> MS --> DB
+    ING --> OS --> OUTBOX
+    MS --> CS --> DB
+    SC --> SS --> DB
+
+    MS -->|post-commit| EB
+    SS -->|post-commit| EB
+    EB --> WSG --> APP
+    EB --> FCM --> APP
+
+    APP -->|REST| MS
+    APP -->|WS| WSG
+
+    MS -->|outbound command| OS
+    OS -->|worker| TP
+
+    ING -->|event: message.received| BOT
+    BOT -->|event: message.reply| MS
+
+    APP -.->|solo consume| REST_API[GET conversations/messages]
+    APP -.->|solo consume| WS_EVENTS[WS events]
+```
+
+### 4.3 Contratos de la capa de interfaz (Flutter / futuro web)
+
+La UI solo consume:
+
+| Recurso | Endpoint / evento |
+|---------|-------------------|
+| Conversaciones | `GET /whatsbot/conversations?since=` |
+| Mensajes | `GET /whatsbot/conversations/{id}/messages?after_id=` |
+| Enviar | `POST /whatsbot/messages` con `client_id` |
+| Marcar leído | `POST /whatsbot/conversations/{id}/mark-read` |
+| WS | `message.new`, `message.status`, `conversation.updated` |
+| Sync recovery | `POST /whatsbot/sync/messages` (genérico, no “twilio”) |
+
+Sin campos `twilio_sid` en contratos públicos (interno en BD).
+
+### 4.4 Flujos corregidos
+
+**Inbound:**
+```
+Webhook → validar firma Twilio → dedup SID (transacción)
+  → INSERT message + UPDATE conversation
+  → COMMIT
+  → emit event
+  → [async] invocar chatbot si aplica
+  → [async worker] enviar respuesta vía Outbox → Provider
+```
+
+**Outbound dueño:**
+```
+POST /messages → dedup client_id
+  → INSERT status=sending (sin Twilio aún)
+  → COMMIT → emit message.new
+  → [worker] Provider.send → UPDATE twilio_sid, status=sent
+  → status callback → delivered/read
+```
+
+**Webhook failure recovery:**
+```
+Cron/worker: replay outbox + Provider.backfill(since) → dedup SID → emit
+App: syncOnReconnect automático + botón manual
+```
+
+---
+
+## 5. Lista priorizada de correcciones
+
+### P0 — Crítico (consistencia / pérdida de datos)
+
+| # | Corrección | Esfuerzo |
+|---|------------|----------|
+| 1 | Corregir `.gitignore`: excluir `data/` raíz pero **incluir** `whatsbot_app/lib/data/` | Bajo |
+| 2 | Inbound dedup: si `MessageSid` existe, **no ejecutar gateway** (idempotencia completa) | Bajo |
+| 3 | Owner send: persistir `status=sending` **antes** de Twilio; actualizar SID después | Medio |
+| 4 | Webhook: no responder 200 a Twilio hasta commit exitoso (o encolar en outbox) | Medio |
+| 5 | Capturar `twilio_sid` en respuestas bot REST y persistir antes de emit | Medio |
+
+### P1 — Alto (experiencia WhatsApp Web)
+
+| # | Corrección | Esfuerzo |
+|---|------------|----------|
+| 6 | Unificar vocabulario estados: `pending/sending/sent/delivered/read/failed` en backend y Flutter | Medio |
+| 7 | No emitir evento WS si falla persist SQLite (`emitAfterPersist`) | Bajo |
+| 8 | Unificar `lastSeenAt` en un solo store (SQLite); hidratar desde API si se expone | Medio |
+| 9 | Sync automático post-login: invocar backfill si WS reconecta tras >N min offline | Medio |
+| 10 | Eliminar REST fetch en `MessageAlertsService`; usar payload WS completo | Medio |
+
+### P2 — Medio (arquitectura / escalabilidad)
+
+| # | Corrección | Esfuerzo |
+|---|------------|----------|
+| 11 | Extraer `MessagingProvider` interface; mover Twilio fuera de `admin_service` | Alto |
+| 12 | Separar webhook en: ingest (rápido) + worker chatbot/send | Alto |
+| 13 | Redis Pub/Sub para `RealtimeHub` multi-instancia | Alto |
+| 14 | Tabla `outbox_events` + worker de replay | Alto |
+| 15 | UNIQUE constraint `(business_id, twilio_sid)` en mensajes | Bajo |
+| 16 | Renombrar `POST /sync/twilio` → `/sync/messages` con provider interno | Bajo |
+
+### P3 — Bajo (pulido)
+
+| # | Corrección | Esfuerzo |
+|---|------------|----------|
+| 17 | Quitar fallback 30s cuando event bus sea fiable | Bajo |
+| 18 | Paginación “cargar anteriores” en chat | Medio |
+| 19 | Documentar contrato WS versionado | Bajo |
+
+---
+
+## 6. Plan de migración paso a paso
+
+### Fase 0 — Estabilización (1–2 semanas, sin cambios destructivos)
+
+1. **Versionar `lib/data/`** — ajustar `.gitignore` y commitear Drift + repos + sync.
+2. **Tests de regresión** — `pytest tests/test_twilio_status.py`, `flutter test`, escenarios E2E WS.
+3. **Baseline métricas** — latencia webhook, tasa dedup, mensajes en BD vs Twilio.
+
+### Fase 1 — Consistencia de datos (2–3 semanas)
+
+1. Idempotencia webhook completa (skip gateway en dedup).
+2. Reordenar owner send: BD primero, Twilio después.
+3. Captura `twilio_sid` en envíos bot REST.
+4. UNIQUE `(business_id, twilio_sid)` vía migración.
+5. Fail-closed en webhook o dead-letter log explícito.
+6. Corregir `emitAfterPersist` (no emitir si SQLite falla).
+
+### Fase 2 — Experiencia tiempo real (1–2 semanas)
+
+1. Unificar estados y verificar ticks vía `message.status` end-to-end.
+2. Consolidar unread/seen en SQLite.
+3. Backfill automático en `syncOnReconnect` (server-side genérico).
+4. Reducir polling: confiar en WS + sync en reconexión.
+
+### Fase 3 — Desacoplar proveedor (3–4 semanas)
+
+1. Crear `providers/base.py` → `TwilioProvider implements MessagingProvider`.
+2. Mover `_send_whatsapp` de `admin_service` al provider.
+3. Gateway emite eventos de dominio; no llama Twilio directamente.
+4. Renombrar APIs públicas sin referencia a Twilio.
+
+### Fase 4 — Escalabilidad (4–6 semanas)
+
+1. Outbox table + worker Celery/RQ/ARQ.
+2. Redis Pub/Sub conectado a `RealtimeHub`.
+3. Webhook ingest < 200ms (persist + ACK); bot/send en worker.
+4. Preparar stub `MetaCloudProvider` con mismos contratos.
+
+### Fase 5 — Meta Cloud API (cuando aplique)
+
+1. Implementar adapter Meta.
+2. Routing por `business.messaging_provider`.
+3. Dedup por `wamid` equivalente a `MessageSid`.
+4. Misma pipeline ingest → BD → event bus.
+
+---
+
+## 7. Evaluación vs. reglas obligatorias
+
+| Regla | Estado actual | Gap |
+|-------|---------------|-----|
+| BD = SSOT | Parcialmente cumplida | Webhook ACK sin BD; Sheets legacy paralelo |
+| UI sin Twilio | Cumplida | Solo REST/WS |
+| Inbound: persist → validate → dedup → emit | Parcial | Validate mínima; gateway post-dedup |
+| Outbound: local → confirm provider | Cliente OK / Servidor invertido | Reordenar POST /messages |
+| Estados queued/sent/delivered/read | Parcial | `queued`→`sent`; bot→`delivered` directo |
+| Recuperación webhook | Manual only | Falta worker + auto-sync |
+| Comportamiento WhatsApp Web | ~70% | WS + Drift sólidos; gaps en ticks/unread/backfill |
+| WebSocket, no polling | Mayormente | Fallback 30s + alerts REST |
+| Multi-provider ready | No | Twilio en chatbot legacy |
+
+---
+
+## 8. Conclusión
+
+WhatsBot **no parte de cero**: la arquitectura Fase 11 (persist → emit → Drift → streams) es el camino correcto hacia WhatsApp Web. Los problemas principales no son de UI sino de **orden de operaciones en el servidor**, **idempotencia incompleta del webhook**, **acoplamiento Twilio↔chatbot**, **hub WS no distribuido** y **capa de datos Flutter fuera de control de versiones**.
+
+La migración propuesta es **incremental y no destructiva**: se preservan gateway, chatbot, pedidos, FCM y offline-first; se refactoriza hacia una pipeline con outbox y provider abstracto.
+
+---
+
+**No se ha modificado código.** Cuando quieras avanzar, recomiendo empezar por **Fase 0 + items P0 (1–5)**, que dan el mayor retorno en consistencia con el menor riesgo.
+
+¿Quieres que profundice en algún subsistema (webhook, SyncEngine, estados, outbox) o que pase a implementar la Fase 0/P0?
 
 
 
 
+
+
+
+## segundo prompt ##
+
+PROMPT (Root Cause Analysis del bug actual)
+
+Analiza profundamente el sistema descrito en el informe técnico de arquitectura de WhatsBot y encuentra la causa raíz exacta del bug actual relacionado con la desincronización o no visualización correcta de chats o mensajes.
+
+IMPORTANTE:
+Este es un ejercicio de análisis. No realices ningún cambio en el sistema ni propongas implementación activa. Solo identifica y explica.
+
+Quiero un análisis extremadamente preciso y enfocado en causa raíz.
+
+Incluye únicamente:
+
+1. Root cause exacto (single or minimal set of causes)
+- Identifica el punto específico del flujo donde se rompe la consistencia.
+- Señala el archivo, función o decisión de arquitectura responsable.
+
+2. Cadena de propagación del bug
+- Desde el evento inicial (webhook / send / sync / WebSocket)
+- Hasta el efecto visible en UI (chats no aparecen / mensajes no cargan / desincronización)
+
+3. Condición específica de fallo
+- Qué combinación exacta de estados, orden de ejecución o race condition lo provoca
+- Ejemplos: “ACK antes de persistencia”, “emit antes de commit”, “deduplicación incompleta”, etc.
+
+4. Por qué no siempre ocurre (heisenbug analysis)
+- Qué condiciones hacen que a veces funcione y a veces falle
+- Concurrencia, timing, cache, orden de eventos, etc.
+
+5. Fix mínimo quirúrgico (solo propuesta)
+- Proponer el cambio mínimo posible que elimine la causa raíz
+- No hacer refactors grandes
+- No rediseñar el sistema
+- Solo la intervención más pequeña posible que estabiliza el flujo
+
+RESTRICCIONES IMPORTANTES:
+- Usa el informe como única fuente de verdad
+- No inventes arquitectura nueva
+- No propongas mejoras generales o abstractas
+- No incluyas acciones de implementación ni código a ejecutar
+- Mantén el análisis en nivel de depuración de producción con logs reales
+
+Objetivo: encontrar la causa raíz exacta del bug con precisión quirúrgica.
+
+
+
+## resp cursor ##
+
+# Root Cause Analysis — Desincronización de chats/mensajes WhatsBot
+
+**Fuente:** Informe técnico v1.30 (`README_PROMPTS.md`, sección «Análisis de arquitectura WhatsBot», líneas 3747–3896), corroborado con evidencia de pruebas v1.29 (E2E ngrok: webhook → `message.new` ✅ cuando WS vivo; UI congelada cuando WS muere).
+
+---
+
+## 1. Root cause exacto
+
+**Causa raíz única (compuesta por dos fallos acoplados en el mismo punto del flujo):**
+
+> **La UI del chat abierto depende exclusivamente del WebSocket para recibir deltas, pero no existe una red de recuperación REST garantizada cuando el WS está caído, zombie o nunca entregó el evento. El sync incremental REST está inhibido por guards de TTL y por `shouldSyncOnConnect` post-hidratación.**
+
+**Punto exacto donde se rompe la consistencia:**
+
+```
+Backend (OK):  webhook → conversation_service → DB commit ✅
+Distribución:  realtime_service.emit → WS → ??? 
+Flutter (ROTO si WS↓):  SyncEngine NO recibe evento → Drift NO se actualiza → watchMessages() emite snapshot viejo
+```
+
+| Responsable | Archivo / función / decisión |
+|-------------|------------------------------|
+| **Canal único de live-update** | `RealtimeService` → `SyncEngine` → Drift → `ChatScreen.watchMessages()` — diseño «WS sin polling» (v1.29 eliminó timer 90s) |
+| **Sync REST inhibido en chat abierto** | `sync_engine.dart` → `needsSyncFromApi()` — TTL **2 min** salta fetch |
+| **Reconexión WS sin backfill** | `shouldSyncOnConnect` post-login: tras hidratar caché REST, reconectar WS **no dispara** sync delta |
+| **Ausencia de fallback activo** (estado pre-v1.30) | `chat_screen.dart` → `_refresh(silent: true)` — sin timer de recuperación cuando WS caído |
+
+**Causa raíz secundaria (estados de mensaje desincronizados, no burbujas faltantes):**
+
+> **Pipeline Twilio → BD incompleto en salientes: SID descartado en envío REST, `POST /webhook/status` inexistente, y `emit_message_saved()` simulaba `delivered` sin confirmación Twilio.**
+
+| Responsable | Archivo / decisión |
+|-------------|-------------------|
+| SID perdido | `infrastructure/twilio_client.py` — `send_whatsapp_message()` descartaba MessageSid |
+| Callbacks ignorados | `POST /webhook/status` ❌ no existía |
+| Estado falso local | `realtime_service.py` → `emit_message_saved()` auto-`delivered` |
+
+El informe descarta explícitamente un bug de renderizado como causa principal: *«El síntoma encaja con WS desconectado + ausencia de fallback, no con un bug de renderizado en la UI.»*
+
+---
+
+## 2. Cadena de propagación del bug
+
+### Camino A — Mensaje entrante, chat abierto, WS muerto (síntoma principal)
+
+```
+Cliente WhatsApp
+  → Twilio
+  → POST /webhook (api/routes/whatsapp.py)
+  → conversation_service.save_incoming_message()
+  → DB INSERT + UPDATE conversation  ✅  [BD = SSOT en servidor]
+  → chatbot/gateway.handle_incoming_message()  [bot responde]
+  → realtime_service.emit("message.new")  ✅ en backend
+  → WS hub in-memory  →  0 clientes conectados / socket zombie  ❌
+       ↓
+Flutter RealtimeService  →  NO recibe frame
+       ↓
+SyncEngine.upsertMessageDeduped()  →  NO ejecuta
+       ↓
+Drift SQLite local  →  sin fila nueva
+       ↓
+ChatScreen StreamBuilder + watchMessages(conversationId)
+       ↓
+UI muestra snapshot del momento de apertura  →  «el chat carga una sola vez»
+```
+
+**Efecto visible:** historial al abrir OK; mensajes nuevos del cliente no aparecen hasta salir/reentrar o esperar >2 min (si vence TTL).
+
+### Camino B — Mismo mensaje, lista de chats vs. chat abierto (desincronización parcial)
+
+```
+message.new (si WS intermitente) o push FCM
+  → message_alerts_service / chats_list_screen  →  preview + sonido ✅
+  → chat_screen (mismo evento)  →  depende del stream Drift, no del payload WS
+       ↓
+Notificación suena, lista puede actualizar, burbuja en chat NO  [v1.17]
+```
+
+### Camino C — Estados sent/delivered/read
+
+```
+Dueño envía desde app
+  → POST /whatsbot/messages → Twilio REST
+  → SID descartado  ❌
+  → save_outgoing_message + emit message.new (status=sent)
+  → Twilio status callback (sent/delivered/read)
+  → POST /webhook/status  ❌ no existía
+       ↓
+Flutter muestra tick simulado (delivered local) o se queda en sent
+       ↓
+Tras reconexión/resync: ticks divergen del estado real Twilio
+```
+
+### Camino D — Lista de chats no reordena al recibir (v1.18, mismo informe evolutivo)
+
+```
+Mensaje llega primero por REST sync (SQLite ya tiene fila)
+  → WS message.new llega después
+  → SyncEngine deduplica mensaje → NO actualiza lastMessageAt de conversación
+       ↓
+Chat recibido queda al final de la lista con timestamp viejo
+```
+
+---
+
+## 3. Condición específica de fallo
+
+**Combinación exacta que provoca el bug:**
+
+| # | Condición | Rol |
+|---|-----------|-----|
+| 1 | `ChatScreen` abierto sobre conversación X | UI suscrita solo a Drift local |
+| 2 | WebSocket desconectado, zombie, o reconexión fallida | Sin delta entrante |
+| 3 | `_refresh(silent: true)` o sync background activo | `needsSyncFromApi()` → **TTL 2 min no vencido** → **skip REST** |
+| 4 | Post-login: caché REST ya hidratada | `shouldSyncOnConnect = false` → reconectar WS **no trae delta** |
+| 5 | Backend persistió correctamente | Mensaje existe en PostgreSQL/SQLite servidor, **no** en Drift cliente |
+
+**Patrón de race documentado (v1.29):**
+
+```
+LOGIN → REST hidrata SQLite ✅
+     → WS conecta (headers ngrok, timeout)
+     → sync concurrente login + WS connected → estado corrupto
+     → _connecting bloqueado → sin más reconexiones
+```
+
+**Patrón «ACK/evento antes de recuperación»:**
+
+```
+emit("message.new") en backend  →  OK si WS vivo
+                               →  evento perdido si WS↓
+BD commit ya ocurrió           →  no hay re-emisión automática al reconectar
+                               →  cliente debe hacer pull REST (pero TTL lo impide)
+```
+
+**Patrón deduplicación incompleta (metadata):**
+
+```
+REST sync persiste mensaje (id=N)
+  → WS message.new (id=N) deduplicado
+  → conversación.lastMessageAt NO actualizado  →  lista desincronizada
+```
+
+---
+
+## 4. Por qué no siempre ocurre (heisenbug)
+
+| Condición | Resultado |
+|-----------|-----------|
+| WS conectado y estable (primeros segundos post-login) | Mensajes en vivo ✅ — confirma que webhook→BD→WS→UI funciona |
+| ngrok/proxy/red mata conexión idle tras 1–2 min | Falla intermitente — típico en móvil |
+| Usuario envía desde app (`_send()` → `setState`) | Sus mensajes **sí** aparecen; entrantes del cliente **no** — asimetría que enmascara el bug |
+| Push/FCM suena | Evento llegó por canal paralelo; chat depende de otro camino (Drift stream) |
+| Usuario sale y reentra al chat tras >2 min | TTL vencido → REST trae delta → «se arregla solo» |
+| Usuario hace pull-to-refresh en lista | Conversaciones se actualizan; chat abierto puede seguir congelado |
+| Reconexión WS exitosa **con** sync delta (v1.29 fix) | Recuperación — explica por qué fixes parciales «a veces» funcionan |
+| Instalación nueva + ngrok sin headers WS en móvil | WS nunca estable → congelación permanente desde carga inicial |
+| Dos dispositivos mismo `business_id` | Hub WS in-memory: uno recibe, otro no si cae su socket |
+
+**Resumen heisenbug:** el backend y el webhook son deterministas; la falla es **probabilística en la capa de distribución cliente** (WS + gates de sync REST), modulada por timing de red, ngrok, TTL y si el usuario genera `setState` local.
+
+---
+
+## 5. Fix mínimo quirúrgico (solo propuesta)
+
+Sin rediseño. Intervenciones mínimas ordenadas por impacto:
+
+### Fix 1 — Eliminar el «agujero» WS↓ + TTL (causa raíz principal)
+
+**Dónde:** `sync_engine.dart` (`needsSyncFromApi`) + `chat_screen.dart` (`_refresh`)
+
+**Qué:** Cuando `RealtimeService.isConnected == false`, **bypass del TTL de 2 min** y ejecutar sync incremental REST (`after_id` / `since`) de forma inmediata y periódica (~30 s) **solo mientras el chat esté abierto**.
+
+**Por qué es mínimo:** no toca webhook, gateway ni modelo de datos; restaura el patrón «BD es SSOT → cliente hace pull cuando push (WS) falla».
+
+### Fix 2 — Backfill obligatorio al reconectar WS
+
+**Dónde:** `realtime_service.dart` / lógica `shouldSyncOnConnect`
+
+**Qué:** En **cada** transición `disconnected → connected`, disparar sync delta REST una vez, **independientemente** de si la hidratación inicial ya ocurrió.
+
+**Por qué es mínimo:** una condición booleana; cierra la race «evento perdido durante WS muerto».
+
+### Fix 3 — Pipeline Twilio status (causa raíz secundaria, ticks)
+
+**Dónde:** `twilio_client.py`, `api/routes/whatsapp.py` (`POST /webhook/status`), `conversation_service.py` (`apply_twilio_status`), `realtime_service.py` (no auto-`delivered` si hay `twilio_sid`)
+
+**Qué:** Persistir SID en salientes; procesar callbacks; emitir `message.status` post-commit.
+
+**Por qué es mínimo:** endpoints y hooks ya previstos en el informe; no cambia arquitectura BD-first.
+
+### Fix 4 — Metadata en dedup (lista de chats)
+
+**Dónde:** `sync_engine.dart` — handler `message.new`
+
+**Qué:** Aunque el mensaje esté deduplicado, **siempre** actualizar `conversation.lastMessageAt` + preview.
+
+**Por qué es mínimo:** 3–5 líneas; corrige reorden sin tocar REST ni WS.
+
+---
+
+**Fix mínimo absoluto si solo se puede uno:** **Fix 1 + Fix 2** — garantizan que cualquier mensaje persistido en BD llegue al Drift cliente aunque el WS falle, que es exactamente la ruptura que el informe identifica como causa raíz del síntoma «chat carga una sola vez / no se actualiza en vivo».
+
+
+## tercer prompt ##
+
+No edites codigo ni modifiques el proyecto aún, haz esto solamente: dame prompts para ir ejecutando fix por fix
+
+
+## resp cursor ##
+
+Prompts listos para copiar y pegar **uno por chat** (o uno tras otro en el mismo chat, esperando validación entre cada uno). Están alineados con el RCA del informe v1.30/v1.31 en `README_PROMPTS.md` y el estilo de `PROMPTS_LISTOS.md`.
+
+---
+
+## Cómo usarlos
+
+| Orden | Prompt | Objetivo |
+|-------|--------|----------|
+| **0** | Auditoría previa | Confirmar qué falta vs. qué ya está en el repo |
+| **1** | Fix 1 | Agujero WS↓ + TTL |
+| **2** | Fix 2 | Backfill al reconectar WS |
+| **3** | Fix 3 | Pipeline Twilio status (ticks) |
+| **4** | Fix 4 | Metadata en dedup (reorden lista) |
+| **5** | Verificación E2E | Cerrar el ciclo sin polling como mecanismo principal |
+
+> **Nota:** Parte del Fix 1 y Fix 3 ya pueden estar en el repo (timer 30s en `chat_screen.dart`, `POST /webhook/status`). Cada prompt pide **verificar primero** y solo implementar lo que falte.
+
+---
+
+## Prompt 0 — Auditoría (NO tocar código)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+@README_PROMPTS.md (sección RCA v1.31, Fixes 1–4)
+
+TAREA: Auditoría de estado actual vs. RCA. NO modifiques código.
+
+Contexto del bug (RCA):
+- Chat abierto depende de WS; si WS cae, Drift no recibe deltas.
+- TTL 2 min en needsSyncFromApi() puede bloquear sync REST.
+- shouldSyncOnConnect post-hidratación puede saltar backfill al reconectar.
+- Pipeline Twilio status incompleto (SID, /webhook/status, auto-delivered).
+- Dedup de message.new puede no actualizar lastMessageAt.
+
+Revisa estos archivos y responde en tabla SÍ/PARCIAL/NO:
+
+Flutter:
+- whatsbot_app/lib/screens/chat_screen.dart (_wsFallbackTimer, force sync WS↓)
+- whatsbot_app/lib/data/sync/sync_engine.dart (syncMessagesIncremental force, _bumpConversationForMessage)
+- whatsbot_app/lib/services/realtime_service.dart (_syncAfterReconnect, shouldSyncOnConnect)
+- whatsbot_app/lib/di/app_services.dart (shouldSyncOnConnect = !_hydratedThisSession)
+
+Backend:
+- infrastructure/twilio_client.py (MessageSid en send)
+- api/routes/whatsapp.py (POST /webhook/status)
+- services/conversation_service.py (apply_twilio_status, mark_outgoing_delivered + twilio_sid guard)
+- services/realtime_service.py (emit_message_saved sin auto-delivered si hay twilio_sid)
+- api/routes/whatsbot.py (guardar twilio_sid en salientes)
+
+Tests existentes:
+- whatsbot_app/test/sync/sync_engine_test.dart
+- tests/test_twilio_status.py
+- whatsbot_app/test/integration/realtime_e2e_test.dart
+
+ENTREGABLE:
+1. Tabla archivo | Fix | Estado | Gap concreto
+2. Orden recomendado de ejecución (1→4)
+3. Una línea: "Listo para Fix-Prompt-1" o qué fix saltar si ya está completo
+
+NO implementes. NO commits.
+```
+
+---
+
+## Fix-Prompt-1 — Agujero WS↓ + TTL (causa raíz principal)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+FIX 1 (RCA): Eliminar el agujero «WS caído + TTL bloquea REST»
+
+SÍNTOMA A CORREGIR:
+- Chat abierto muestra historial inicial OK.
+- Mensajes nuevos del cliente NO aparecen mientras el chat está abierto si el WS está caído/zombie.
+- A veces se arregla solo al reentrar tras >2 min (TTL vencido).
+
+CAUSA RAÍZ (informe):
+- sync_engine.dart → syncMessagesIncremental() respeta needsSyncFromApi() (TTL ~2 min) salvo force:true.
+- chat_screen.dart no garantizaba pull REST cuando WS↓.
+
+ALCANCE MÍNIMO (solo Flutter, salvo gap real en API):
+1. whatsbot_app/lib/data/sync/sync_engine.dart
+   - Cuando force:true O RealtimeService.isConnected == false → bypass needsSyncFromApi().
+   - Opcional: syncOpenConversations(force: true) usable desde chat/lista.
+
+2. whatsbot_app/lib/screens/chat_screen.dart
+   - Al abrir chat con WS↓: sync inmediato force:true (no esperar TTL).
+   - Timer fallback ~30s SOLO mientras chat abierto + WS↓ + online (cancelar si WS↑).
+   - Al detectar transición connected→disconnected: un refresh force:true inmediato.
+   - NO reintroducir polling global en lista cuando WS está OK.
+
+3. whatsbot_app/lib/data/repositories/message_repository.dart
+   - Verificar needsSyncFromApi(); no romper TTL cuando WS está conectado (optimización normal).
+
+PROHIBIDO:
+- Tocar chatbot/gateway.py, intents, webhook Twilio.
+- Polling periódico con WS conectado.
+- Refactors grandes de pantallas.
+
+TESTS OBLIGATORIOS (crear o ampliar):
+- syncMessagesIncremental(force:false) + caché reciente + WS↓ → NO debe omitir sync.
+- syncMessagesIncremental(force:false) + caché reciente + WS↑ → puede omitir (TTL OK).
+- Test widget/integration: chat abierto simula WS↓ + mensaje en API → burbuja aparece vía REST fallback.
+
+VALIDACIÓN:
+cd whatsbot_app && flutter analyze && flutter test
+
+CHECKLIST MANUAL (2–4 pasos):
+1. Login → abrir chat → icono nube (WS↓) → cliente escribe → burbuja en ≤30s sin salir del chat.
+2. WS conectado → mensaje cliente → <1s sin polling.
+3. Hot restart → repetir 1 con modo avión breve.
+
+ENTREGABLE:
+- Resumen 3–5 líneas
+- Archivos tocados
+- Comandos + resultados
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+
+NO commit salvo que yo lo pida.
+```
+
+---
+
+## Fix-Prompt-2 — Backfill obligatorio al reconectar WS
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+FIX 2 (RCA): Backfill REST en cada reconexión WS (cerrar race evento perdido)
+
+SÍNTOMA A CORREGIR:
+- Mensajes persistidos en BD servidor durante WS muerto no llegan al cliente al reconectar WS.
+- Tras login hidratado, reconexiones posteriores no traen delta REST.
+
+CAUSA RAÍZ (informe):
+- app_services.dart: shouldSyncOnConnect = () => !_hydratedThisSession
+- realtime_service.dart: al recibir frame "connected" llama _syncAfterReconnect() sin force
+- Gate bloquea sync tras primera hidratación.
+
+ALCANCE MÍNIMO:
+1. whatsbot_app/lib/services/realtime_service.dart
+   - En handler type=="connected": _syncAfterReconnect(force: true) (no depender del gate post-login).
+   - Mantener debounce anti-carrera (ej. 3s) solo para evitar doble sync simultáneo, NO para saltar backfill.
+
+2. whatsbot_app/lib/di/app_services.dart
+   - Revisar shouldSyncOnConnect: debe permitir sync en reconexiones aunque _hydratedThisSession == true.
+   - Opciones mínimas aceptables:
+     a) Eliminar gate y confiar en debounce/mutex de syncEngine, O
+     b) shouldSyncOnConnect siempre true excepto durante hydrateAfterLogin en curso.
+
+3. whatsbot_app/lib/data/sync/sync_engine.dart
+   - Confirmar syncOnReconnect() serializado (mutex _syncChain) sigue evitando carrera login+WS.
+   - syncOpenConversations(force:true) incluye chats abiertos (trackOpenConversation).
+
+PROHIBIDO:
+- Cambiar flujo de login/hidratación más allá del gate.
+- Backend Python salvo bug demostrado.
+
+TESTS OBLIGATORIOS:
+- Simular: hydrate OK → shouldSyncOnConnect bloqueaba → tras "connected" debe llamar syncOnReconnect.
+- sync concurrente login + WS connected no corrompe SQLite (test existente debe seguir pasando).
+- Ampliar whatsbot_app/test/integration/realtime_e2e_test.dart si hace falta.
+
+VALIDACIÓN:
+flutter analyze && flutter test
+
+CHECKLIST MANUAL:
+1. Login → dejar app en lista 2 min (WS puede caer) → cliente escribe → minimizar app 5s → volver → mensaje aparece sin pull manual.
+2. Forzar reconexión (modo avión 10s) en chat abierto → mensajes perdidos durante caída aparecen al reconectar.
+
+ENTREGABLE + nota INCREMENTAL_GUIDE.md. NO commit.
+```
+
+---
+
+## Fix-Prompt-3 — Pipeline Twilio status (ticks sent/delivered/read)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+FIX 3 (RCA secundario): Estados de mensaje sincronizados con Twilio (BD = SSOT)
+
+SÍNTOMA A CORREGIR:
+- Ticks inconsistentes: delivered simulado local vs. real Twilio.
+- Salientes sin twilio_sid → callbacks no correlacionan.
+- Estados no se actualizan en UI tras webhook de status.
+
+CAUSA RAÍZ (informe):
+- SID descartado en envío REST.
+- POST /webhook/status ausente o incompleto.
+- emit_message_saved() auto-delivered sin esperar Twilio.
+
+PASO 0 — VERIFICAR qué ya existe antes de codear:
+- infrastructure/twilio_client.py
+- api/routes/whatsapp.py POST /webhook/status
+- services/conversation_service.py apply_twilio_status + dedup MessageSid
+- config/settings.py status_callback URL
+- api/routes/whatsbot.py guardar SID al enviar dueño
+
+SOLO IMPLEMENTAR GAPS:
+
+Backend (mínimo):
+1. twilio_client.py — send_whatsapp_message() retorna y usa MessageSid; status_callback URL en envío.
+2. whatsapp.py — POST /webhook/status: sent/delivered/read/failed → apply_twilio_status → db.commit → emit_message_status.
+3. conversation_service.py — dedup entrantes por MessageSid; apply_twilio_status mapeo Twilio→local.
+4. whatsbot.py — persistir twilio_sid en mensajes del dueño (is_admin).
+5. realtime_service.py — NO llamar mark_outgoing_delivered si msg.twilio_sid presente; emit message.status post-commit.
+
+Flutter (mínimo):
+6. sync_engine.dart _handleMessageStatus — ya existe; verificar deliveredAt/readAt/twilioSid en modelo.
+7. message_status_ticks.dart — reflejar estados reales del stream Drift.
+
+CONFIG PRODUCCIÓN (documentar, no secretos):
+- API_PUBLIC_URL HTTPS para callbacks Twilio.
+- REALTIME_ENABLED=true.
+
+TESTS OBLIGATORIOS:
+pytest tests/test_twilio_status.py tests/test_realtime_ws.py tests/test_message_status.py -q
+flutter test (sync + ticks si hay)
+
+CHECKLIST MANUAL:
+1. Enviar desde app → tick sent → delivered cuando Twilio callback (logs: Twilio status sid=...).
+2. Sin callback (modo dev sin URL pública) → tick se queda en sent, NO delivered falso.
+3. Reabrir chat → ticks persisten desde SQLite.
+
+PROHIBIDO:
+- Tocar gateway/intents.
+- Simular delivered en backend si hay twilio_sid.
+
+ENTREGABLE + nota INCREMENTAL_GUIDE.md. NO commit.
+```
+
+---
+
+## Fix-Prompt-4 — Metadata en dedup (lista de chats)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+
+FIX 4 (RCA): Reorden de lista cuando message.new llega deduplicado
+
+SÍNTOMA A CORREGIR:
+- Al RECIBIR mensaje del cliente, el chat a veces queda al final de la lista (timestamp viejo).
+- Al ENVIAR desde app, el chat sí sube arriba.
+
+CAUSA RAÍZ (informe / v1.18):
+- Mensaje ya en SQLite vía REST sync.
+- WS message.new deduplicado → no actualiza conversation.lastMessageAt/preview.
+
+ALCANCE MÍNIMO:
+1. whatsbot_app/lib/data/sync/sync_engine.dart
+   - En _handleMessageNew: upsertMessageDeduped puede no insertar fila nueva, pero _bumpConversationForMessage SIEMPRE debe ejecutarse con preview/timestamp del mensaje entrante.
+   - Verificar mergeConversationWithMessage no baja lastMessageAt con datos viejos.
+
+2. whatsbot_app/lib/data/repositories/chat_repository.dart
+   - mergeWithLocal / mergeConversationWithMessage: nunca regresionar lastMessageAt.
+
+3. whatsbot_app/lib/screens/chats_list_screen.dart
+   - Listener message.new: reordenar aunque el mensaje ya exista en SQLite (si aplica).
+
+PROHIBIDO:
+- Tocar backend salvo ORDER BY en API si hay inconsistencia demostrada.
+- Refactor de lista completa.
+
+TESTS OBLIGATORIOS:
+- Ampliar test existente: "handleRealtimeEvent actualiza conversación aunque el mensaje esté deduplicado" → assert lastMessageAt sube.
+- chat_repository_test: mergeWithLocal no baja timestamp.
+- flutter analyze && flutter test
+
+CHECKLIST MANUAL:
+1. Cliente escribe → chat sube al tope al instante (lista abierta).
+2. Enviar desde app → mismo comportamiento.
+3. Secuencia: recibir mientras sync REST en background → chat igual sube arriba.
+
+ENTREGABLE + nota INCREMENTAL_GUIDE.md. NO commit.
+```
+
+---
+
+## Fix-Prompt-5 — Verificación E2E (cerrar el ciclo)
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+VERIFICACIÓN E2E — Fixes 1–4 aplicados
+
+NO implementes features nuevas. Solo verificar que el flujo completo funciona como WhatsApp Web (BD SSOT, WS push, REST pull de recuperación).
+
+EJECUTA TÚ (no solo describas):
+
+Automatizado:
+cd final_system && pytest tests/test_realtime_ws.py tests/test_twilio_status.py tests/test_message_status.py -q
+cd whatsbot_app && flutter analyze && flutter test
+python scripts/validate_system.py (si aplica WS)
+
+E2E manual contra API real (ngrok/dispositivo):
+1. LOGIN_OK → WS connected (log/indicador sin nube permanente)
+2. Cliente escribe webhook → message.new → burbuja <1s chat abierto
+3. Simular WS↓ (avión 15s) chat abierto → mensaje aparece vía fallback REST ≤30s
+4. Reconectar → delta REST trae lo perdido (Fix 2)
+5. Enviar desde app → ticks sent→delivered (Fix 3, si URL pública)
+6. Recibir mensaje → chat sube arriba (Fix 4)
+
+CRITERIO DE ÉXITO:
+- Sin polling periódico cuando WS conectado.
+- Cero necesidad de salir/reentrar chat para ver mensajes nuevos.
+- Tests verdes.
+
+ENTREGABLE:
+- Tabla escenario | resultado | evidencia (log/test)
+- Lista de gaps restantes (si alguno falla) con fix puntual sugerido
+- NO commit
+
+Si algo falla, indica cuál Fix (1–4) reabrir — no mezcles correcciones en un solo diff.
+```
+
+---
+
+## Prompt opcional — Si push suena pero burbuja no (regresión v1.17)
+
+Solo si tras Fixes 1–2 el síntoma persiste en chat abierto con WS conectado:
+
+```
+@docs/INCREMENTAL_GUIDE.md (v1.17)
+
+REGRESIÓN UI: push/lista OK pero burbuja NO en chat abierto con WS conectado.
+
+Diagnóstico obligatorio ANTES de codear:
+1. ¿Mensaje está en Drift pero no en pantalla? → UI/stream en chat_screen.dart
+2. ¿No está en Drift pero notificación sí? → SyncEngine no persistió evento WS
+
+Verificar chat_screen.dart:
+- _messagesStream estable en initState (no recrear watchMessages en build)
+- _messagesSub llama setState al recibir del store
+- StreamBuilder usa stream estable + initialData
+
+SOLO whatsbot_app/lib/screens/chat_screen.dart si evidencia apunta a UI.
+flutter analyze && flutter test test/screens/chat_screen_test.dart
+
+NO tocar backend. NO commit.
+```
+
+---
+
+**Orden recomendado:** 0 → 1 → 2 → (3 si ticks importan ahora) → 4 → 5.  
+Fixes **1 + 2** son los críticos para «chat congelado»; **3** y **4** son síntomas colaterales del mismo informe.
+
+
+
+
+## otro prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+
+TAREA: Auditoría de estado actual vs. RCA. NO modifiques código.
+
+Contexto del bug (RCA):
+- Chat abierto depende de WS; si WS cae, Drift no recibe deltas.
+- TTL 2 min en needsSyncFromApi() puede bloquear sync REST.
+- shouldSyncOnConnect post-hidratación puede saltar backfill al reconectar.
+- Pipeline Twilio status incompleto (SID, /webhook/status, auto-delivered).
+- Dedup de message.new puede no actualizar lastMessageAt.
+
+Revisa estos archivos y responde en tabla SÍ/PARCIAL/NO:
+
+Flutter:
+- whatsbot_app/lib/screens/chat_screen.dart (_wsFallbackTimer, force sync WS↓)
+- whatsbot_app/lib/data/sync/sync_engine.dart (syncMessagesIncremental force, _bumpConversationForMessage)
+- whatsbot_app/lib/services/realtime_service.dart (_syncAfterReconnect, shouldSyncOnConnect)
+- whatsbot_app/lib/di/app_services.dart (shouldSyncOnConnect = !_hydratedThisSession)
+
+Backend:
+- infrastructure/twilio_client.py (MessageSid en send)
+- api/routes/whatsapp.py (POST /webhook/status)
+- services/conversation_service.py (apply_twilio_status, mark_outgoing_delivered + twilio_sid guard)
+- services/realtime_service.py (emit_message_saved sin auto-delivered si hay twilio_sid)
+- api/routes/whatsbot.py (guardar twilio_sid en salientes)
+
+Tests existentes:
+- whatsbot_app/test/sync/sync_engine_test.dart
+- tests/test_twilio_status.py
+- whatsbot_app/test/integration/realtime_e2e_test.dart
+
+ENTREGABLE:
+1. Tabla archivo | Fix | Estado | Gap concreto
+2. Orden recomendado de ejecución (1→4)
+3. Una línea: "Listo para Fix-Prompt-1" o qué fix saltar si ya está completo
+
+NO implementes. NO commits.
+
+
+## resp cursor ##
+
+
+**En corto:** el código del Fix 1 ya está; lo que falta y explica mensajes que no vuelven al reconectar es el **Fix 2**. Ese es el siguiente paso.
+
+## Qué hacer ahora (en orden)
+
+### 1. Ejecutar **Fix-Prompt-2** (prioridad)
+En `README_PROMPTS.md` (aprox. líneas 4866–4916), copia el bloque **Fix-Prompt-2** y pégalo en un chat nuevo de Cursor.
+
+Eso debe corregir:
+- `realtime_service.dart`: en el frame `connected` → `_syncAfterReconnect(force: true)`
+- `app_services.dart`: quitar o relajar el gate `shouldSyncOnConnect = () => !_hydratedThisSession`
+
+Es el fix del síntoma: *“reconectó el WS pero no trajo los mensajes que llegaron mientras estaba caído”*.
+
+---
+
+### 2. Cerrar tests del **Fix 1** (rápido, sin reimplementar)
+Tras el Fix 2, otro prompt pequeño o el mismo agente puede añadir solo tests:
+- `syncMessagesIncremental` con caché reciente + WS↓ → **no** debe omitir sync
+- (opcional) test de integración chat abierto + WS↓ + mensaje en API
+
+El código de `chat_screen` / fallback 30s ya está; aquí solo falta cobertura de tests.
+
+---
+
+### 3. **Saltar implementación** de Fix 3 y Fix 4 (por ahora)
+- **Fix 3** (Twilio ticks): backend ya está; solo tocar si en manual ves ticks falsos.
+- **Fix 4** (lista no sube): lógica en `sync_engine` ya está; solo reabrir si tras Fix 2 la lista sigue mal.
+
+---
+
+### 4. Verificación final → **Fix-Prompt-5**
+Cuando Fix 2 (+ tests Fix 1) estén listos, corre **Fix-Prompt-5** (E2E): `pytest`, `flutter test`, y el checklist manual (modo avión 15s, etc.).
+
+---
+
+## Resumen en una línea
+
+| Paso | Acción |
+|------|--------|
+| **Ahora** | Pegar y ejecutar **Fix-Prompt-2** |
+| **Después** | Tests Fix 1 + **Fix-Prompt-5** |
+| **No hacer aún** | Reimplementar Fix 1, 3 o 4 |
+
+Si quieres, en el siguiente mensaje pega **Fix-Prompt-2** y lo implemento yo directamente en el repo.
+
+
+
+
+
+
+
+## otro prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+FIX 1 (RCA): Eliminar el agujero «WS caído + TTL bloquea REST»
+
+SÍNTOMA A CORREGIR:
+- Chat abierto muestra historial inicial OK.
+- Mensajes nuevos del cliente NO aparecen mientras el chat está abierto si el WS está caído/zombie.
+- A veces se arregla solo al reentrar tras >2 min (TTL vencido).
+
+CAUSA RAÍZ (informe):
+- sync_engine.dart → syncMessagesIncremental() respeta needsSyncFromApi() (TTL ~2 min) salvo force:true.
+- chat_screen.dart no garantizaba pull REST cuando WS↓.
+
+ALCANCE MÍNIMO (solo Flutter, salvo gap real en API):
+1. whatsbot_app/lib/data/sync/sync_engine.dart
+   - Cuando force:true O RealtimeService.isConnected == false → bypass needsSyncFromApi().
+   - Opcional: syncOpenConversations(force: true) usable desde chat/lista.
+
+2. whatsbot_app/lib/screens/chat_screen.dart
+   - Al abrir chat con WS↓: sync inmediato force:true (no esperar TTL).
+   - Timer fallback ~30s SOLO mientras chat abierto + WS↓ + online (cancelar si WS↑).
+   - Al detectar transición connected→disconnected: un refresh force:true inmediato.
+   - NO reintroducir polling global en lista cuando WS está OK.
+
+3. whatsbot_app/lib/data/repositories/message_repository.dart
+   - Verificar needsSyncFromApi(); no romper TTL cuando WS está conectado (optimización normal).
+
+PROHIBIDO:
+- Tocar chatbot/gateway.py, intents, webhook Twilio.
+- Polling periódico con WS conectado.
+- Refactors grandes de pantallas.
+
+TESTS OBLIGATORIOS (crear o ampliar):
+- syncMessagesIncremental(force:false) + caché reciente + WS↓ → NO debe omitir sync.
+- syncMessagesIncremental(force:false) + caché reciente + WS↑ → puede omitir (TTL OK).
+- Test widget/integration: chat abierto simula WS↓ + mensaje en API → burbuja aparece vía REST fallback.
+
+VALIDACIÓN:
+cd whatsbot_app && flutter analyze && flutter test
+
+CHECKLIST MANUAL (2–4 pasos):
+1. Login → abrir chat → icono nube (WS↓) → cliente escribe → burbuja en ≤30s sin salir del chat.
+2. WS conectado → mensaje cliente → <1s sin polling.
+3. Hot restart → repetir 1 con modo avión breve.
+
+ENTREGABLE:
+- Resumen 3–5 líneas
+- Archivos tocados
+- Comandos + resultados
+- Nota breve en docs/INCREMENTAL_GUIDE.md
+
+NO commit salvo que yo lo pida.
+
+
+
+## resp cursor 
+
+## Resumen
+
+Se cerró el agujero **«WS caído + TTL bloquea REST»**: `SyncEngine` ya no respeta el TTL de 2 min cuando el WebSocket está desconectado (o cuando se pasa `force: true`). Con WS caído, el chat hace pull REST al abrir, al detectar `connected→disconnected` y cada ~30 s mientras sigue abierto. Con WS conectado, el TTL sigue activo y no hay polling extra en la lista.
+
+## Archivos tocados
+
+| Archivo | Cambio |
+|---------|--------|
+| `whatsbot_app/lib/data/sync/sync_engine.dart` | Bypass TTL si `force` o `!realtimeService.isConnected` |
+| `whatsbot_app/lib/services/realtime_service.dart` | `debugSetConnected()` para tests |
+| `whatsbot_app/test/sync/sync_engine_test.dart` | Tests TTL con WS↑/↓ |
+| `whatsbot_app/test/screens/chat_screen_test.dart` | Test REST fallback con WS caído |
+| `docs/INCREMENTAL_GUIDE.md` | Nota de la incidencia |
+
+**Sin cambios** (ya cumplían el alcance): `chat_screen.dart` (timer 30 s, refresh al abrir/desconectar), `message_repository.dart` (`needsSyncFromApi` intacto).
+
+## Validación
+
+```bash
+cd whatsbot_app; flutter analyze; flutter test
+```
+
+- **flutter analyze:** 2 avisos `info` preexistentes (no errores)
+- **flutter test:** **42 passed**
+
+## Checklist manual
+
+1. Login → abrir chat → icono nube (WS↓) → cliente escribe → burbuja en ≤30 s sin salir
+2. WS conectado → mensaje cliente → &lt;1 s vía WS
+3. Hot restart → repetir (1) con modo avión breve
+
+
+## resp cursor ##
+
+## Resumen
+
+Se cerró el agujero **«WS caído + TTL bloquea REST»**: `SyncEngine` ya no respeta el TTL de 2 min cuando el WebSocket está desconectado (o cuando se pasa `force: true`). Con WS caído, el chat hace pull REST al abrir, al detectar `connected→disconnected` y cada ~30 s mientras sigue abierto. Con WS conectado, el TTL sigue activo y no hay polling extra en la lista.
+
+## Archivos tocados
+
+| Archivo | Cambio |
+|---------|--------|
+| `whatsbot_app/lib/data/sync/sync_engine.dart` | Bypass TTL si `force` o `!realtimeService.isConnected` |
+| `whatsbot_app/lib/services/realtime_service.dart` | `debugSetConnected()` para tests |
+| `whatsbot_app/test/sync/sync_engine_test.dart` | Tests TTL con WS↑/↓ |
+| `whatsbot_app/test/screens/chat_screen_test.dart` | Test REST fallback con WS caído |
+| `docs/INCREMENTAL_GUIDE.md` | Nota de la incidencia |
+
+**Sin cambios** (ya cumplían el alcance): `chat_screen.dart` (timer 30 s, refresh al abrir/desconectar), `message_repository.dart` (`needsSyncFromApi` intacto).
+
+## Validación
+
+```bash
+cd whatsbot_app; flutter analyze; flutter test
+```
+
+- **flutter analyze:** 2 avisos `info` preexistentes (no errores)
+- **flutter test:** **42 passed**
+
+## Checklist manual
+
+1. Login → abrir chat → icono nube (WS↓) → cliente escribe → burbuja en ≤30 s sin salir
+2. WS conectado → mensaje cliente → &lt;1 s vía WS
+3. Hot restart → repetir (1) con modo avión breve
+
+
+
+## otro prompt ##
+
+Qué debo hacer ahora?
+
+
+
+## resp cursor ##
+
+Ahora tienes tres pasos claros, en este orden:
+
+## 1. Validar FIX 1 en el dispositivo (obligatorio)
+
+Los tests automáticos ya pasan; falta confirmar el comportamiento real:
+
+1. `cd whatsbot_app` → `flutter run` (con API levantada: `python -m api.main`).
+2. Login → abre un chat → fuerza WS caído (modo avión breve o espera el icono nube).
+3. Desde WhatsApp, escribe al bot → la burbuja debe aparecer en **≤30 s** sin salir del chat.
+4. Repite con WS conectado → el mensaje debe llegar en **<1 s**.
+5. Hot restart y repite el caso con WS caído.
+
+Si algo falla, descríbelo y lo ajustamos antes de seguir.
+
+## 2. Commit (solo si quieres)
+
+Dijiste que no commiteara salvo que lo pidas. Si el checklist manual va bien y quieres guardar el fix:
+
+> *"Haz commit del FIX 1"*
+
+## 3. Siguiente incidencia: FIX 2
+
+En `README_PROMPTS.md` viene **FIX 2 — Backfill REST en cada reconexión WS**: mensajes que llegaron a la BD mientras el WS estaba muerto no se sincronizan al reconectar porque `shouldSyncOnConnect` bloquea el sync tras la primera hidratación.
+
+Cuando FIX 1 esté validado (o si prefieres ir directo), pega el bloque **FIX 2** de `README_PROMPTS.md` o dime:
+
+> *"Aplica FIX 2"*
+
+---
+
+**Resumen:** primero prueba manual en el teléfono/emulador → commit opcional → FIX 2. ¿Quieres que aplique FIX 2 ya o prefieres validar FIX 1 antes?
+
+
+
+#####
+## otro prompt ##
+
+no edites codigo ni nada del proyecto solo responde:
+
+dame un prompt para poner el analisis que hcie y decirte donde hay error, que puntos van bien y donde no
+
+
+## resp cursor  ##
+
+Aquí tienes un prompt listo para copiar, rellenar y pegarme:
+
+---
+
+```
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+## Análisis manual post-FIX — sin tocar código
+
+Acabo de probar en dispositivo/emulador. NO edites código todavía: solo analiza mi informe, dime qué va bien, qué está mal, posible causa raíz y qué fix tocaría después (FIX 1, 2, 3…).
+
+### Contexto de la prueba
+- **Fix probado:** FIX 1 (WS caído + TTL / REST fallback) — [sí / no / parcial]
+- **Fecha/hora aprox.:** 
+- **Dispositivo:** [Android / iOS / emulador + modelo]
+- **App:** [debug / release / hot restart usado: sí/no]
+- **Backend:** [local / ngrok / producción] — API URL: 
+- **Estado red:** [WiFi / datos / modo avión usado: sí/no y cuánto tiempo]
+
+### Resultados por escenario
+
+#### Escenario 1 — Chat abierto + WS caído (icono nube)
+- **Pasos que hice:** 
+- **Resultado esperado:** burbuja del cliente en ≤30 s sin salir del chat
+- **Resultado real:** 
+- **¿Cumple?** [sí / no / a veces]
+- **Notas:** [tiempo real, si hubo que reentrar al chat, etc.]
+
+#### Escenario 2 — WS conectado (sin icono nube)
+- **Pasos que hice:** 
+- **Resultado esperado:** mensaje en <1 s vía WS, sin polling visible
+- **Resultado real:** 
+- **¿Cumple?** [sí / no / a veces]
+
+#### Escenario 3 — Hot restart + modo avión breve
+- **Pasos que hice:** 
+- **Resultado esperado:** igual que escenario 1 tras reiniciar
+- **Resultado real:** 
+- **¿Cumple?** [sí / no / a veces]
+
+#### Escenario 4 — (opcional) Lista de chats con WS caído
+- **¿La lista se actualiza sola o solo al abrir el chat?** 
+- **¿Es comportamiento esperado o bug?** [según yo: …]
+
+### Lo que SÍ funciona bien
+1. 
+2. 
+3. 
+
+### Lo que NO funciona o falla
+1. **Síntoma:** 
+   **Cuándo ocurre:** 
+   **Severidad:** [bloqueante / molesto / cosmético]
+2. 
+
+### Dudas / comportamientos raros (no sé si es bug)
+- 
+
+### Evidencia (opcional)
+- Logs de terminal / `flutter run`: 
+- Capturas: [sí/no — qué muestran]
+- Mensaje de error exacto (si hay): 
+
+### Mi hipótesis (puede estar mal)
+- Creo que el error está en: [sync_engine / chat_screen / WS / API / otro]
+- Porque: 
+
+---
+
+**Qué necesito de ti:**
+1. Tabla resumen: escenario | esperado | observado | OK/NO
+2. Qué puntos del FIX 1 están cerrados y cuáles no
+3. Si el fallo apunta a FIX 2, 3 o 4 del README_PROMPTS.md (y por qué)
+4. Siguiente paso recomendado: [más pruebas / aplicar FIX X / commit FIX 1]
+5. **NO modifiques código** en esta respuesta — solo diagnóstico.
+```
+
+---
+
+Rellena las secciones con lo que viste en la prueba; con eso puedo decirte qué va bien, dónde está el error y qué fix tocar después, sin tocar el proyecto.
+
+
+
+######
+## otro prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+## Análisis manual post-FIX — sin tocar código
+
+Acabo de probar en dispositivo/emulador. NO edites código todavía: solo analiza mi informe, dime qué va bien, qué está mal, posible causa raíz y qué fix tocaría después (FIX 1, 2, 3…).
+
+
+### Resultados por escenario
+
+#### Escenario 1 — Chat abierto + WS caído (icono nube)
+- **Pasos que hice:** 
+- **Resultado esperado:** burbuja del cliente en ≤30 s sin salir del chat
+- **Resultado real:** 
+- **¿Cumple?** [sí]
+- **Notas:** [Al desconectarme, recibir mensaje y conectarme, se recibe y se muestra el mensaje correctamente]
+
+#### Escenario 2 — WS conectado (sin icono nube)
+- **Pasos que hice:** 
+- **Resultado esperado:** mensaje en <1 s vía WS, sin polling visible
+- **Resultado real:** 
+- **¿Cumple?** [No]
+- **Notas:** [Ya conectado, cuando recibo un mensaje el chat no se actualiza ni tampoco se muestran mensajes nuevos dentro de la app (notificaciones push y sonido si funciona)]
+
+
+## resp cursor## 
+
+
+## Tabla resumen
+
+| Escenario | Esperado | Observado | ¿OK? |
+|-----------|----------|-----------|------|
+| 1 — WS caído / reconexión | Burbuja en ≤30 s sin salir del chat | Al desconectar → mensaje → reconectar, **sí se muestra** | **Parcial / sí*** |
+| 2 — WS conectado | Mensaje en <1 s en la UI, sin polling | **Chat no se actualiza**; push y sonido **sí** | **No** |
+
+\*En el escenario 1 no probaste exactamente el checklist de FIX 1 (chat abierto + icono nube + mensaje sin reconectar). Probaste el flujo **desconectar → mensaje → reconectar**, que mezcla FIX 1 y FIX 2. Eso puede ir bien aunque falle el live con WS arriba.
+
+---
+
+## FIX 1 — qué está cerrado y qué no
+
+**Va bien (probablemente):**
+- Hay camino para ver mensajes tras caída/reconexión de red.
+- REST + reconexión no dejan el mensaje perdido para siempre.
+
+**No validado aún del FIX 1 puro:**
+- Chat **abierto** con icono nube, **sin reconectar**, mensaje en ≤30 s.
+- Eso es el síntoma original del TTL; tu prueba no lo cubre del todo.
+
+**Conclusión FIX 1:** no cerrado al 100 % en manual, pero **no parece el problema principal** que reportas.
+
+---
+
+## Diagnóstico del fallo grave (Escenario 2)
+
+**Síntoma:** con WS conectado, el mensaje **no actualiza la UI** (lista/chat), pero **sí** disparan notificación y sonido.
+
+**Qué implica:**
+- El WebSocket **sí recibe** el evento (o algo equivalente).
+- La tubería de **alertas** funciona.
+- La tubería **evento → burbuja/preview en pantalla** está rota o incompleta.
+
+**Causa raíz probable (orden de probabilidad):**
+
+1. **UI no se refresca con `message.new` en vivo** — el evento llega a alertas, pero la lista de chats o el chat abierto no reaccionan al persistir en SQLite / al stream de Drift.
+2. **Estás en lista vs chat abierto** — si el fallo es solo en la lista, encaja más con **FIX 4** (preview/orden al recibir). Si también falla **dentro del chat abierto**, es un bug del camino WS→SQLite→`watchMessages` o del merge en `ChatScreen`.
+3. **Deduplicación / `conversation_id`** — el mensaje se persiste en otro hilo o se descarta y la UI no cambia; las alertas igual pueden sonar.
+
+**Qué NO parece ser (por tus notas):**
+- **FIX 2** (backfill al reconectar) — el fallo es con WS **ya conectado**.
+- **FIX 3** (ticks Twilio) — no hablas de estados, sino de mensajes que no aparecen.
+- **FIX 1** (TTL + REST con WS caído) — el problema principal es al revés: con WS **arriba** no se ve en UI.
+
+---
+
+## Lo que va bien vs lo que no
+
+| Área | Estado |
+|------|--------|
+| Recepción WS / eventos | Probablemente OK (hay sonido/push) |
+| Alertas (sonido + push) | OK |
+| Mensajes visibles con WS conectado | **FALLO** |
+| Mensajes tras reconectar | OK (según escenario 1) |
+| FIX 1 (fallback REST con nube) | Sin probar del todo; no es el bloqueante actual |
+
+---
+
+## Siguiente paso recomendado (sin tocar código aún)
+
+1. **Aclarar en una segunda prueba** (2 minutos):
+   - ¿Fallo en **lista de chats**, en **chat abierto**, o en **ambos**?
+   - Con WS conectado (sin nube), ¿el preview de la lista cambia?
+   - ¿Al **entrar** al chat, aparece el mensaje o sigue sin estar?
+
+2. **Prioridad de fix:** no FIX 2 primero. Investigar **WS conectado → mensaje en pantalla**:
+   - Si solo lista → **FIX 4** o bug en `chats_list_screen`.
+   - Si chat abierto también → bug en `ChatScreen` + stream Drift / `SyncEngine.handleRealtimeEvent`.
+
+3. **FIX 1:** repetir checklist puro (nube + chat abierto + no reconectar hasta 30 s) antes de darlo por cerrado.
+
+4. **Commit FIX 1:** yo **no** lo haría todavía; el escenario 2 es regresión/bloqueante para uso real con WS normal.
+
+---
+
+## Prompt corto para la siguiente prueba (opcional)
+
+Pega esto después de la mini-prueba:
+
+```
+Escenario 2 ampliado:
+- ¿Dónde estaba? [lista / chat abierto / ambos]
+- ¿Preview de lista cambió? [sí/no]
+- ¿Al abrir el chat el mensaje aparece? [sí/no]
+- ¿Sonido/push? [sí/no]
+NO edites código — solo diagnóstico.
+```
+
+Con esas cuatro respuestas se puede acotar si el siguiente fix es FIX 4, un fix de `ChatScreen` en vivo, o ambos.
+
+
+
+
+
+
+###### 
+## otro prompt ##
+
+Escenario 2 ampliado:
+- ¿Dónde estaba? [lista / chat abierto / ambos]
+- ¿Preview de lista cambió? [sí/no]
+- ¿Al abrir el chat el mensaje aparece? [sí/no]
+- ¿Sonido/push? [sí/no]
+NO edites código — solo diagnóstico.
+
+## otro prompt ##
+
+Escenario 2 ampliado:
+- ¿Dónde estaba? [lista / chat abierto / ambos]
+- ¿Preview de lista cambió? [sí/no]
+- ¿Al abrir el chat el mensaje aparece? [sí/no]
+- ¿Sonido/push? [sí/no]
+NO edites código — solo diagnóstico.
+
+
+## otro prompt ##
+
+@PROMPT_EVOLUCION_SAAS_WHATSBOT.md
+@docs/INCREMENTAL_GUIDE.md
+@docs/FLUTTER_APP.md
+
+FIX 1b (RCA): WS conectado — alertas sí, mensaje NO visible en lista ni chat
+
+## Contexto del análisis manual (ya probado — no re-diagnosticar)
+
+Escenario 2 ampliado:
+- ¿Dónde estaba? **ambos** (lista + chat abierto)
+- ¿Preview de lista cambió? **no**
+- ¿Al abrir el chat el mensaje aparece? **no**
+- ¿Sonido/push? **sí**
+
+Interpretación: el evento `message.new` llega y `handleRealtimeEvent` corre (alertas OK), pero el mensaje **no queda visible** en el hilo que muestra la UI (lista ni chat). No es solo falta de `setState`.
+
+## SÍNTOMA A CORREGIR
+
+- Con WS conectado (sin icono nube), mensaje entrante del cliente:
+  - Suena / notifica push ✓
+  - **No** actualiza preview en lista
+  - **No** muestra burbuja en chat abierto
+  - **No** aparece al abrir/reentrar el chat
+
+## CAUSA RAÍZ PROBABLE (investigar y confirmar en código)
+
+1. **Desacople conversation_id / wa_id**: mensaje persistido en otro hilo local (`_resolveForLocalStore`, canonicalización servidor) distinto al chat que abre la UI.
+2. **UI depende solo de Drift** sin merge inmediato del payload WS en `ChatScreen` (regresión vs v1.17).
+3. **TTL + WS↑**: al abrir chat, `syncMessagesIncremental` omite REST si caché reciente → sin segundo chance si SQLite no tiene el mensaje en el hilo correcto.
+
+## ALCANCE MÍNIMO (solo Flutter salvo gap real en API)
+
+1. **whatsbot_app/lib/data/sync/sync_engine.dart**
+   - En `_handleMessageNew`: asegurar que mensaje y `_bumpConversationForMessage` usan el **mismo** `conversationId` local que ve la UI (resolver por `wa_id` / conversación abierta).
+   - Si `
+
+
+
+## resp cursor ##
+
+**Resultado:** `flutter test` terminó con **45 OK / 1 fallo**. El único fallo fue el test FIX 1b en `chat_screen_test.dart`: **timeout a los 10 minutos** (no una aserción incorrecta).
+
+**Causa:** `await watchMessages(1).first` en el test competía con la suscripción activa de `ChatScreen` y se quedaba colgado.
+
+**Corrección aplicada:** el test del widget solo comprueba que la burbuja aparece en UI (la persistencia en SQLite ya la cubre `sync_engine_test`). Ese test ahora pasa en ~2 s.
+
+Para validar la suite completa:
+
+```powershell
+cd whatsbot_app
+flutter test
+```
+
+
+
+
+###################################################
 
 

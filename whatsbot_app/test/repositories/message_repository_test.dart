@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:whatsbot_app/data/local/app_database.dart';
@@ -158,6 +159,44 @@ void main() {
     await db.syncCursorDao.setCursor('messages_sync_at:1', '1');
 
     expect(await repository.needsSyncFromApi(1), isFalse);
+  });
+
+  test('resolveForLocalStore prefiere hilo local por wa_id', () async {
+    final now = DateTime.utc(2026, 6, 5, 12);
+    await db.conversationDao.upsert(
+      ConversationsCompanion(
+        id: const Value(1),
+        businessId: const Value('default'),
+        customerWaId: const Value('+5491111111111'),
+        updatedAt: Value(now),
+        syncedAt: Value(now),
+      ),
+    );
+    await db.conversationDao.upsert(
+      ConversationsCompanion(
+        id: const Value(99),
+        businessId: const Value('default'),
+        customerWaId: const Value('+5498888888888'),
+        updatedAt: Value(now),
+        syncedAt: Value(now),
+      ),
+    );
+
+    final resolved = await repository.resolveForLocalStore(
+      ChatMessage(
+        id: 501,
+        conversationId: 99,
+        direction: 'incoming',
+        body: 'WS con id servidor distinto',
+        waId: '+5491111111111',
+        isAdmin: false,
+        channel: 'whatsapp',
+        status: 'delivered',
+        createdAt: now,
+      ),
+    );
+
+    expect(resolved.conversationId, 1);
   });
 
   test('upsertMessageDeduped omite mensajes idénticos', () async {

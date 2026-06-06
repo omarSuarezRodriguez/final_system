@@ -526,3 +526,37 @@ cd whatsbot_app && flutter test && flutter analyze
 ```bash
 cd whatsbot_app && flutter test && flutter analyze
 ```
+
+---
+
+## Chat: REST fallback con WS caído (FIX TTL) ✅
+
+- `sync_engine.dart`: `syncMessagesIncremental` omite TTL si `force: true` o `RealtimeService.isConnected == false`.
+- `chat_screen.dart`: sync inmediato al abrir con WS↓; timer REST ~30 s solo con chat abierto + WS↓ + online; refresh force al pasar connected→disconnected.
+- Sin polling en lista cuando WS está OK.
+
+**Tests:** `test/sync/sync_engine_test.dart` (TTL con WS↑/↓); `test/screens/chat_screen_test.dart` (`ChatScreen con WS caído trae mensaje nuevo vía REST sin reabrir`).
+
+```bash
+cd whatsbot_app && flutter analyze && flutter test
+```
+
+**Probar manual:** login → abrir chat con icono nube → cliente escribe → burbuja en ≤30 s sin salir; con WS conectado el mensaje llega al instante.
+
+---
+
+## Chat: WS conectado — mensaje visible en lista y chat (FIX 1b) ✅
+
+- **Causa raíz:** `resolveForLocalStore` priorizaba `conversation_id` del servidor sobre el hilo local por `wa_id`; bump y UI apuntaban al hilo equivocado.
+- `message_repository.dart`: `resolveForLocalStore` enlaza por `wa_id` antes que id servidor.
+- `sync_engine.dart`: `_handleMessageNew` persiste y hace bump con mensaje ya resuelto al hilo local.
+- `chat_screen.dart`: merge inmediato del payload WS en `_displayMessages` (v1.17).
+- `chats_list_screen.dart`: bump de preview por `wa_id` al recibir `message.new`.
+
+**Tests:** `message_repository_test` (wa_id); `sync_engine_test` (persist en hilo local); `chat_screen_test` y `chats_list_screen_test` (conversation_id servidor distinto).
+
+```bash
+cd whatsbot_app && flutter analyze && flutter test
+```
+
+**Probar manual:** WS conectado → cliente escribe → burbuja <1 s en chat abierto; preview y orden en lista; al abrir chat el mensaje ya está.

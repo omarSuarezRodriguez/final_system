@@ -7,6 +7,7 @@ import 'package:whatsbot_app/data/sync/sync_engine.dart';
 import 'package:whatsbot_app/models/conversation.dart';
 import 'package:whatsbot_app/models/message.dart';
 import 'package:whatsbot_app/models/realtime_event.dart';
+import 'package:whatsbot_app/services/realtime_service.dart';
 
 import '../helpers/test_api_client.dart';
 
@@ -156,7 +157,8 @@ void main() {
     expect(conversation?.lastMessagePreview, 'Cliente escribe');
   });
 
-  test('syncMessagesIncremental omite sync si caché reciente', () async {
+  test('syncMessagesIncremental omite sync si caché reciente y WS conectado', () async {
+    realtimeService.debugSetConnected(true);
     testApi.messagesByConversation[1] = [
       {
         'id': 10,
@@ -191,6 +193,104 @@ void main() {
     final stored = await messages.watchMessages(1).first;
     expect(stored, hasLength(1));
     expect(stored.single.id, 10);
+  });
+
+  test('handleRealtimeEvent guarda message.new en hilo local por wa_id', () async {
+    await chats.upsertConversation(
+      Conversation(
+        id: 1,
+        businessId: 'default',
+        customerWaId: '+5491111111111',
+        lastMessagePreview: 'Viejo',
+        lastMessageAt: DateTime.utc(2026, 6, 1, 10),
+        updatedAt: DateTime.utc(2026, 6, 1, 10),
+      ),
+    );
+    await chats.upsertConversation(
+      Conversation(
+        id: 99,
+        businessId: 'default',
+        customerWaId: '+5498888888888',
+        updatedAt: DateTime.utc(2026, 6, 1, 9),
+      ),
+    );
+
+    await engine.handleRealtimeEvent(
+      RealtimeEvent(
+        type: 'message.new',
+        message: ChatMessage(
+          id: 120,
+          conversationId: 99,
+          direction: 'incoming',
+          body: 'En hilo correcto',
+          waId: '+5491111111111',
+          isAdmin: false,
+          channel: 'whatsapp',
+          status: 'delivered',
+          createdAt: DateTime.utc(2026, 6, 5, 16),
+        ),
+      ),
+    );
+
+    final stored = await messages.watchMessages(1).first;
+    expect(stored.single.id, 120);
+    expect(stored.single.body, 'En hilo correcto');
+
+    final conversation = await chats.getConversation(1);
+    expect(conversation?.lastMessagePreview, 'En hilo correcto');
+    expect(conversation?.lastMessageAt?.toUtc(), DateTime.utc(2026, 6, 5, 16));
+  });
+
+  test('syncMessagesIncremental con caché reciente y WS caído no omite sync', () async {
+    realtimeService.debugSetConnected(false);
+    testApi.messagesByConversation[1] = [
+      {
+        'id': 10,
+        'conversation_id': 1,
+        'direction': 'incoming',
+        'body': 'Cacheado',
+        'wa_id': '+5491111111111',
+        'is_admin': false,
+        'channel': 'whatsapp',
+        'status': 'delivered',
+        'created_at': DateTime.utc(2026, 6, 1, 11).toIso8601String(),
+      },
+    ];
+    await messages.refreshFromApi(1, incremental: true);
+    testApi.messagesByConversation[1] = [
+      {
+        'id': 10,
+        'conversation_id': 1,
+        'direction': 'incoming',
+        'body': 'Cacheado',
+        'wa_id': '+5491111111111',
+        'is_admin': false,
+        'channel': 'whatsapp',
+        'status': 'delivered',
+        'created_at': DateTime.utc(2026, 6, 1, 11).toIso8601String(),
+      },
+      {
+        'id': 11,
+        'conversation_id': 1,
+        'direction': 'incoming',
+        'body': 'Nuevo con WS caído',
+        'wa_id': '+5491111111111',
+        'is_admin': false,
+        'channel': 'whatsapp',
+        'status': 'delivered',
+        'created_at': DateTime.utc(2026, 6, 1, 12).toIso8601String(),
+      },
+    ];
+
+    final synced = await engine.syncMessagesIncremental(1);
+    expect(synced, isNotEmpty);
+
+    final stored = await messages.watchMessages(1).first;
+    expect(stored, hasLength(2));
+    expect(
+      stored.any((m) => m.id == 11 && m.body == 'Nuevo con WS caído'),
+      isTrue,
+    );
   });
 
   test('handleRealtimeEvent dispara onIncomingMessage para entrantes', () async {
